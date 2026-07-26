@@ -95,12 +95,15 @@ public enum InstallError: Error, LocalizedError {
     case sizeMismatch(file: String, got: Int64, want: Int64)
     case httpError(file: String, code: Int)
     case allSourcesFailed(file: String, underlying: String)
+    case insufficientDisk(needed: Int64, available: Int64)
 
     public var errorDescription: String? {
         switch self {
         case .sizeMismatch(let f, let got, let want): "\(f) 校验失败（\(got)/\(want) 字节）"
         case .httpError(let f, let code): "\(f) 下载失败（HTTP \(code)）"
         case .allSourcesFailed(let f, let underlying): "\(f) 所有下载源均失败：\(underlying)"
+        case .insufficientDisk(let needed, let available):
+            "磁盘空间不足：还需约 \(needed / 1_000_000_000 + 1) GB，当前可用 \(available / 1_000_000_000) GB。清理后点重试可从断点继续。"
         }
     }
 }
@@ -149,6 +152,15 @@ public actor ModelInstaller {
     public func install(onProgress: @Sendable @escaping (InstallProgress) -> Void) async throws -> URL {
         let modelDir = destination.appendingPathComponent(manifest.name, isDirectory: true)
         let (skipped, todo) = plan()
+        // 磁盘预检：剩余待下载字节 + 1GB 余量；不足时先报错，别下到一半才失败
+        try? FileManager.default.createDirectory(at: modelDir, withIntermediateDirectories: true)
+        let remaining = todo.reduce(Int64(0)) { $0 + $1.size }
+        if let values = try? modelDir.resourceValues(
+               forKeys: [.volumeAvailableCapacityForImportantUsageKey]),
+           let available = values.volumeAvailableCapacityForImportantUsage,
+           available < remaining + 1_000_000_000 {
+            throw InstallError.insufficientDisk(needed: remaining, available: available)
+        }
         self.onProgress = onProgress
         self.bytesDone = skipped
         self.filesDoneCount = manifest.files.count - todo.count

@@ -19,6 +19,9 @@ final class AppModel: ObservableObject {
     }
 
     @Published var stage: Stage = .idle
+    // 转写真实进度（显示值；权威时间永远在 Transcript）
+    @Published private(set) var transcribePhaseText = ""
+    @Published private(set) var transcribeFraction: Double?
     @Published private(set) var transcript: Transcript?
     @Published private(set) var patches = PatchSession()
     @Published var sourceURL: URL?
@@ -122,25 +125,53 @@ final class AppModel: ObservableObject {
         guard let modelFolder else { stage = .needsModel; return }
         sourceURL = url
         stage = .transcribing(fileName: url.lastPathComponent, startedAt: Date())
+        transcribePhaseText = "抽取音频…"
+        transcribeFraction = nil
         Task {
             do {
                 let pcm = try await PCMExtractor.monoPCM(url: url)
+                self.warnIfLong(pcmSampleCount: pcm.count)
                 let tokenizerDir = modelFolder.appendingPathComponent("tokenizer")
                 let transcriber = WhisperKitTranscriber(
                     modelFolder: modelFolder,
                     tokenizerFolder: FileManager.default.fileExists(atPath: tokenizerDir.path)
                         ? tokenizerDir : nil)
                 let result = try await transcriber.transcribe(
-                    audioPath: url.path, pcm: pcm, language: "zh")
+                    audioPath: url.path, pcm: pcm, language: "zh"
+                ) { phase in
+                    Task { @MainActor [weak self] in self?.apply(phase) }
+                }
                 self.transcript = result
                 self.patches = PatchSession()
                 self.setupPlayer(url: url)
                 self.refreshDerived()
                 self.stage = .editor
                 ProjectStore.save(source: url, transcript: result, patch: self.patches.current)
-            } catch {
+            } catch let error as MediaEngineError {
                 self.stage = .failed(error.localizedDescription)
+            } catch {
+                // 非媒体错误大概率是模型加载/推理失败——给出可行动的出路
+                self.stage = .failed("转写失败：\(error.localizedDescription)\n若模型文件不完整，可在「设置 → 模型」重新下载校验。")
             }
+        }
+    }
+
+    private func apply(_ phase: TranscribePhase) {
+        switch phase {
+        case .loadingModel:
+            transcribePhaseText = "加载模型…（约十几秒）"
+            transcribeFraction = nil
+        case .transcribing(let fraction):
+            transcribePhaseText = "本地转写中…"
+            transcribeFraction = fraction
+        }
+    }
+
+    /// M1 建议 ≤30 分钟（长素材内存/耗时优化留 M2，见设计文档风险表）
+    private func warnIfLong(pcmSampleCount: Int) {
+        let minutes = Double(pcmSampleCount) / Double(PCMExtractor.sampleRate) / 60
+        if minutes > 30 {
+            transcribePhaseText = "素材长约 \(Int(minutes)) 分钟——M1 建议 30 分钟以内，转写会比较慢"
         }
     }
 
@@ -236,6 +267,41 @@ final class AppModel: ObservableObject {
     }
 
     var lastProjectURL: URL? { ProjectStore.lastOpenedURL() }
+
+    // MARK: - 模型管理（设置页）
+
+    var modelDiskBytes: Int64? {
+        guard let modelFolder,
+              let files = FileManager.default.enumerator(
+                  at: modelFolder, includingPropertiesForKeys: [.fileSizeKey]) else { return nil }
+        var total: Int64 = 0
+        for case let url as URL in files {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
+        }
+        return total
+    }
+
+    func revealModelInFinder() {
+        guard let modelFolder else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([modelFolder])
+    }
+
+    /// 只删应用自管目录里的模型（用户自选的外部目录只解除引用，不动文件）
+    func deleteModel() {
+        guard let modelFolder else { return }
+        let managedRoot = Self.appSupportModels.resolvingSymlinksInPath().path
+        if modelFolder.resolvingSymlinksInPath().path.hasPrefix(managedRoot) {
+            try? FileManager.default.removeItem(at: modelFolder)
+        }
+        self.modelFolder = nil
+        if transcript == nil { stage = .needsModel }
+    }
+
+    /// 重新下载 = 清单校验 + 缺损补齐（installer 自动跳过完整文件）
+    func repairModel() {
+        stage = .needsModel
+        downloadModel()
+    }
 
     // MARK: - 预览播放（UI 层；时间只从 Transcript 派生）
 

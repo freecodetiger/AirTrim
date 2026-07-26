@@ -31,7 +31,65 @@ struct AirTrimApp: App {
         }
 
         Settings {
-            LLMSettingsView()
+            TabView {
+                LLMSettingsView()
+                    .tabItem { Label("AI 服务", systemImage: "sparkles") }
+                ModelSettingsView()
+                    .tabItem { Label("模型", systemImage: "cpu") }
+            }
+            .environmentObject(model)
+        }
+    }
+}
+
+/// 模型管理：状态 · 磁盘占用 · 校验修复 · 删除（onboarding 之外的唯一模型入口）
+struct ModelSettingsView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var confirmDelete = false
+
+    var body: some View {
+        Form {
+            if let folder = model.modelFolder {
+                Section("语音识别模型（本地，转写全程离线）") {
+                    LabeledContent("状态", value: "已就绪")
+                    LabeledContent("位置", value: folder.path)
+                    if let bytes = model.modelDiskBytes {
+                        LabeledContent("磁盘占用",
+                                       value: ByteCountFormatter.string(fromByteCount: bytes,
+                                                                        countStyle: .file))
+                    }
+                    HStack {
+                        Button("在访达中显示") { model.revealModelInFinder() }
+                        Button("校验并修复…") { model.repairModel() }
+                            .help("按清单核对所有文件尺寸，缺损部分断点续传补齐")
+                        Button("删除模型…", role: .destructive) { confirmDelete = true }
+                    }
+                }
+            } else {
+                Section("语音识别模型") {
+                    if let progress = model.installProgress {
+                        ProgressView(value: progress.fraction)
+                        Text("\(Int(progress.fraction * 100))% · \(progress.currentFile)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else {
+                        LabeledContent("状态", value: "未安装")
+                        Button("下载模型（3.1 GB）") { model.downloadModel() }
+                        Button("已有模型？选择目录…") { model.chooseModelFolder() }
+                            .buttonStyle(.link)
+                    }
+                    if let error = model.installError {
+                        Text(error).font(.caption).foregroundStyle(.red)
+                    }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 480)
+        .alert("删除模型？", isPresented: $confirmDelete) {
+            Button("删除", role: .destructive) { model.deleteModel() }
+            Button("取消", role: .cancel) {}
+        } message: {
+            Text("将删除应用自管目录下的模型文件（约 3.1 GB），之后可随时重新下载。用户自选的外部模型目录不会被删除，仅解除引用。")
         }
     }
 }
@@ -159,13 +217,23 @@ struct ImportView: View {
 }
 
 struct TranscribingView: View {
+    @EnvironmentObject var model: AppModel
     let fileName: String
     let startedAt: Date
 
     var body: some View {
         VStack(spacing: 14) {
-            ProgressView().controlSize(.large)
-            Text("正在本地转写 \(fileName)…").font(.title3)
+            if let fraction = model.transcribeFraction {
+                ProgressView(value: fraction)
+                    .frame(width: 320)
+                Text("\(Int(fraction * 100))%")
+                    .font(.system(.title3, design: .monospaced))
+            } else {
+                ProgressView().controlSize(.large)
+            }
+            Text("正在处理 \(fileName)").font(.title3)
+            Text(model.transcribePhaseText)
+                .font(.caption).foregroundStyle(.secondary)
             TimelineView(.periodic(from: startedAt, by: 1)) { context in
                 Text("已用 \(Int(context.date.timeIntervalSince(startedAt))) 秒 · 全程离线")
                     .font(.caption).foregroundStyle(.secondary)
@@ -184,7 +252,10 @@ struct FailedView: View {
             Image(systemName: "exclamationmark.triangle").font(.system(size: 40))
                 .foregroundStyle(.orange)
             Text(message).multilineTextAlignment(.center)
-            Button("返回") { model.stage = .idle }
+            HStack {
+                Button("返回") { model.stage = .idle }
+                SettingsLink { Text("打开设置") }
+            }
         }
         .padding(40)
     }

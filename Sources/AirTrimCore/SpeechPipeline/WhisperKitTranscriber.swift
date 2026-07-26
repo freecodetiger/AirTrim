@@ -2,12 +2,26 @@ import CoreMedia
 import Foundation
 import WhisperKit
 
+/// 转写阶段（真实进度，供 UI 展示；分数只用于显示，非权威时间）
+public enum TranscribePhase: Sendable, Equatable {
+    case loadingModel
+    case transcribing(Double)  // 0...1
+}
+
 /// 转写引擎协议：面向协议便于测试与将来换引擎（ADR-0006 备选 FunASR）。
 public protocol Transcriber: Sendable {
     /// - Parameters:
     ///   - audioPath: 源媒体路径（引擎自行解码）
     ///   - pcm: 16kHz 单声道 PCM（VAD 融合用，由 MediaEngine 抽取，组合根传入）
-    func transcribe(audioPath: String, pcm: [Float], language: String) async throws -> Transcript
+    ///   - onProgress: 阶段/进度回调（任意线程调用）
+    func transcribe(audioPath: String, pcm: [Float], language: String,
+                    onProgress: (@Sendable (TranscribePhase) -> Void)?) async throws -> Transcript
+}
+
+public extension Transcriber {
+    func transcribe(audioPath: String, pcm: [Float], language: String) async throws -> Transcript {
+        try await transcribe(audioPath: audioPath, pcm: pcm, language: language, onProgress: nil)
+    }
 }
 
 /// WhisperKit 适配（ADR-0006）。职责：
@@ -28,20 +42,40 @@ public struct WhisperKitTranscriber: Transcriber {
         self.tokenizerFolder = tokenizerFolder
     }
 
-    public func transcribe(audioPath: String, pcm: [Float], language: String = "zh") async throws -> Transcript {
+    /// Foundation.Progress 非 Sendable 但 fractionCompleted 线程安全（内部加锁），
+    /// 只为跨 Task 轮询展示进度而包装
+    private final class ProgressBox: @unchecked Sendable {
+        let progress: Progress
+        init(_ progress: Progress) { self.progress = progress }
+    }
+
+    public func transcribe(audioPath: String, pcm: [Float], language: String = "zh",
+                           onProgress: (@Sendable (TranscribePhase) -> Void)? = nil) async throws -> Transcript {
         let config = WhisperKitConfig(
             model: modelFolder.lastPathComponent,
             modelFolder: modelFolder.path,
             tokenizerFolder: tokenizerFolder,
             download: false
         )
+        onProgress?(.loadingModel)
         let pipe = try await WhisperKit(config)
         if language.hasPrefix("zh"), let tok = pipe.tokenizer {
             pipe.tokenizer = ZhWordSplitTokenizer(wrapping: tok)
         }
 
         let options = DecodingOptions(task: .transcribe, language: language, wordTimestamps: true)
+        onProgress?(.transcribing(0))
+        let box = ProgressBox(pipe.progress)
+        let poller = Task {
+            while !Task.isCancelled {
+                onProgress?(.transcribing(min(1, max(0, box.progress.fractionCompleted))))
+                try await Task.sleep(nanoseconds: 300_000_000)
+            }
+        }
+        defer { poller.cancel() }
         let results = try await pipe.transcribe(audioPath: audioPath, decodeOptions: options)
+        poller.cancel()
+        onProgress?(.transcribing(1))
 
         let silences = EnergyVAD.silences(samples: pcm, sampleRate: Self.sampleRate)
         let duration = CMTime(value: CMTimeValue(pcm.count), timescale: Self.sampleRate)

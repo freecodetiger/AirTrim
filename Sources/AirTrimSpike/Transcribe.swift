@@ -15,6 +15,10 @@ struct Transcribe: AsyncParsableCommand {
     @Option(help: "WhisperKit 模型名（如 tiny / base / small / large-v3）")
     var model: String = "large-v3"
 
+    @Option(name: .customLong("model-folder"),
+            help: "本地模型目录（含 *.mlmodelc；提供后跳过下载，--model 仅作标签）")
+    var modelFolder: String?
+
     @Option(help: "语言代码")
     var language: String = "zh"
 
@@ -27,8 +31,8 @@ struct Transcribe: AsyncParsableCommand {
             throw ValidationError("找不到文件：\(audio)")
         }
 
-        FileHandle.standardError.write(Data("加载模型 \(model)（首次运行会自动下载）…\n".utf8))
-        let config = WhisperKitConfig(model: model, prewarm: true)
+        FileHandle.standardError.write(Data("加载模型 \(model)\(modelFolder == nil ? "（首次运行会自动下载）" : "（本地 \(modelFolder!)）")…\n".utf8))
+        let config = WhisperKitConfig(model: model, modelFolder: modelFolder, prewarm: true)
         let pipe = try await WhisperKit(config)
 
         let duration = try await AVURLAsset(url: audioURL).load(.duration).seconds

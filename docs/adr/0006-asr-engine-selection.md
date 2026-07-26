@@ -1,6 +1,6 @@
 # ADR-0006 · ASR 引擎选型：WhisperKit + VAD 融合
 
-- 状态：**提议**（待 owner 确认后改"已接受"）
+- 状态：已接受（2026-07-26，owner 确认后进入 M1 设计）
 - 日期：2026-07-26
 - 依据：M0 spike（`docs/spikes/m0-asr-spike.md` · 量化结果 `docs/spikes/results/`）
 

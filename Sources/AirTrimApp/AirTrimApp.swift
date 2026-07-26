@@ -20,6 +20,49 @@ struct AirTrimApp: App {
                     .disabled(!model.patches.canUndo)
             }
         }
+
+        Settings {
+            LLMSettingsView()
+        }
+    }
+}
+
+/// BYOK 设置（OpenAI 兼容端点）：Key 存 Keychain，不落任何配置文件
+struct LLMSettingsView: View {
+    @State private var baseURL = LLMSettings.defaultBaseURL
+    @State private var modelName = LLMSettings.defaultModel
+    @State private var apiKey = ""
+    @State private var status: String?
+
+    var body: some View {
+        Form {
+            Section("AI 服务（OpenAI 兼容格式 · 只上传文字稿，绝不上传音视频）") {
+                TextField("API 地址", text: $baseURL,
+                          prompt: Text("https://api.deepseek.com 或 https://api.openai.com/v1"))
+                TextField("模型", text: $modelName, prompt: Text("deepseek-chat"))
+                SecureField("API Key", text: $apiKey, prompt: Text("sk-…"))
+                HStack {
+                    Button("保存") {
+                        do {
+                            try LLMSettings.save(baseURLString: baseURL, model: modelName, apiKey: apiKey)
+                            status = "已保存（Key 存入钥匙串）"
+                        } catch {
+                            status = error.localizedDescription
+                        }
+                    }
+                    if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
+        .onAppear {
+            if let config = LLMSettings.load() {
+                baseURL = config.baseURL.absoluteString
+                modelName = config.model
+                apiKey = config.apiKey
+            }
+        }
     }
 }
 
@@ -156,11 +199,31 @@ struct EditorView: View {
                 .disabled(!model.patches.canUndo)
 
                 Button {
+                    model.aiResegment()
+                } label: {
+                    if model.aiSegmenting {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Label("AI 断句", systemImage: "wand.and.stars")
+                    }
+                }
+                .disabled(model.aiSegmenting)
+                .help("按语义重新断句（需在设置里配置 API Key，⌘, 打开设置）")
+
+                Button {
                     model.exportSRT()
                 } label: {
                     Label("导出 SRT", systemImage: "square.and.arrow.up")
                 }
             }
+        }
+        .alert("AI 断句失败", isPresented: Binding(
+            get: { model.aiError != nil },
+            set: { if !$0 { model.aiError = nil } }
+        )) {
+            Button("好") { model.aiError = nil }
+        } message: {
+            Text(model.aiError ?? "")
         }
         .navigationTitle(model.sourceURL?.lastPathComponent ?? "AirTrim")
     }

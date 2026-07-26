@@ -168,6 +168,31 @@ final class AppModel: ObservableObject {
         if patches.undo() { refreshDerived() }
     }
 
+    // MARK: - AI 语义断句（LLMProvider · 只上传文字稿 · 结果走 PatchSession 可 undo）
+
+    @Published var aiSegmenting = false
+    @Published var aiError: String?
+
+    func aiResegment() {
+        guard let transcript, !aiSegmenting else { return }
+        guard let config = LLMSettings.load() else {
+            aiError = LLMError.notConfigured.localizedDescription
+            return
+        }
+        aiSegmenting = true
+        Task {
+            do {
+                let segmenter = SemanticSegmenter(client: OpenAIChatClient(config: config))
+                let starts = try await segmenter.proposeSentenceStarts(for: transcript)
+                patches.apply { $0.sentenceStarts = starts }
+                refreshDerived()
+            } catch {
+                aiError = error.localizedDescription
+            }
+            aiSegmenting = false
+        }
+    }
+
     private func refreshDerived() {
         guard let transcript else { cachedCues = []; return }
         cachedCues = Subtitles.cues(transcript: transcript, patch: patches.current)

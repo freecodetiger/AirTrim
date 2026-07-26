@@ -228,7 +228,29 @@ struct EditorView: View {
                 } label: {
                     Label("导出 SRT", systemImage: "square.and.arrow.up")
                 }
+
+                Button {
+                    model.exportBurnedVideo()
+                } label: {
+                    Label("导出视频", systemImage: "film.stack")
+                }
+                .disabled(model.burnProgress != nil)
+                .help("把字幕烧录进视频，导出 MP4")
             }
+        }
+        .sheet(isPresented: Binding(
+            get: { model.burnProgress != nil },
+            set: { _ in }
+        )) {
+            VStack(spacing: 14) {
+                Text("正在烧录字幕…").font(.headline)
+                ProgressView(value: model.burnProgress ?? 0)
+                    .frame(width: 300)
+                Text("\(Int((model.burnProgress ?? 0) * 100))% · 源文件保持只读，输出为新文件")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("取消") { model.cancelBurn() }
+            }
+            .padding(28)
         }
         .alert("AI 断句失败", isPresented: Binding(
             get: { model.aiError != nil },
@@ -237,6 +259,14 @@ struct EditorView: View {
             Button("好") { model.aiError = nil }
         } message: {
             Text(model.aiError ?? "")
+        }
+        .alert("导出失败", isPresented: Binding(
+            get: { model.exportError != nil },
+            set: { if !$0 { model.exportError = nil } }
+        )) {
+            Button("好") { model.exportError = nil }
+        } message: {
+            Text(model.exportError ?? "")
         }
         .navigationTitle(model.sourceURL?.lastPathComponent ?? "AirTrim")
     }

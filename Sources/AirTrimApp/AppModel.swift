@@ -290,6 +290,39 @@ final class AppModel: ObservableObject {
 
     // MARK: - 导出
 
+    @Published private(set) var burnProgress: Double?
+    @Published var exportError: String?
+    private var burnTask: Task<Void, Never>?
+
+    /// 烧录字幕导出：整段直通 + CATextLayer 合成（MediaEngine 执行，设计 D4）
+    func exportBurnedVideo() {
+        guard let sourceURL, transcript != nil, burnProgress == nil else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + "-字幕.mp4"
+        guard panel.runModal() == .OK, let outputURL = panel.url else { return }
+        burnProgress = 0
+        let cues = cachedCues
+        burnTask = Task {
+            do {
+                try await SubtitleBurner.burn(source: sourceURL, cues: cues, to: outputURL) { fraction in
+                    Task { @MainActor [weak self] in self?.burnProgress = fraction }
+                }
+                NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+            } catch is CancellationError {
+                // 用户取消：静默收场
+            } catch {
+                self.exportError = error.localizedDescription
+            }
+            self.burnProgress = nil
+            self.burnTask = nil
+        }
+    }
+
+    func cancelBurn() {
+        burnTask?.cancel()
+    }
+
     func exportSRT() {
         guard transcript != nil else { return }
         let srt = Subtitles.srt(cachedCues)
@@ -300,7 +333,8 @@ final class AppModel: ObservableObject {
         do {
             try Data(srt.utf8).write(to: url)
         } catch {
-            stage = .failed("SRT 写入失败：\(error.localizedDescription)")
+            // 写入失败不该把整个编辑器打回 failed 死路，弹窗即可
+            exportError = "SRT 写入失败：\(error.localizedDescription)"
         }
     }
 }

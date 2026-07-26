@@ -7,6 +7,6 @@ struct SpikeCLI: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "airtrim-spike",
         abstract: "AirTrim M0 · 中文 ASR 词级时间戳评测装置",
-        subcommands: [Transcribe.self, GenTruth.self, Evaluate.self, EarCheck.self, VADDump.self]
+        subcommands: [Transcribe.self, GenTruth.self, Evaluate.self, EarCheck.self, VADDump.self, Burn.self]
     )
 }

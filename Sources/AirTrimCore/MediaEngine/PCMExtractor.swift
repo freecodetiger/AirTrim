@@ -46,11 +46,17 @@ public enum PCMExtractor {
 public enum MediaEngineError: Error, LocalizedError {
     case noAudioTrack
     case readerFailed
+    case noVideoTrack
+    case compositionFailed
+    case exportFailed(String?)
 
     public var errorDescription: String? {
         switch self {
-        case .noAudioTrack: "找不到音频轨道"
-        case .readerFailed: "音频读取失败"
+        case .noAudioTrack: "这个文件里没有音频轨道，无法转写。请确认导入的是带声音的口播视频。"
+        case .readerFailed: "音频读取失败，文件可能已损坏或格式不受支持。"
+        case .noVideoTrack: "这个文件里没有视频轨道，无法烧录字幕。纯音频素材请改用「导出 SRT」。"
+        case .compositionFailed: "导出会话创建失败，请重试。"
+        case .exportFailed(let reason): "视频导出失败\(reason.map { "：\($0)" } ?? "")。请检查磁盘剩余空间后重试。"
         }
     }
 }

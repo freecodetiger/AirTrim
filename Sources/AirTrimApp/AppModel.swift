@@ -41,6 +41,11 @@ final class AppModel: ObservableObject {
     init() {
         modelFolder = Self.discoverModel()
         if modelFolder == nil { stage = .needsModel }
+        // 冒烟/回归钩子：AIRTRIM_AUTOLOAD=<视频路径> 启动即转写直达编辑器
+        if let auto = ProcessInfo.processInfo.environment["AIRTRIM_AUTOLOAD"],
+           modelFolder != nil {
+            start(url: URL(fileURLWithPath: auto))
+        }
     }
 
     static func discoverModel() -> URL? {

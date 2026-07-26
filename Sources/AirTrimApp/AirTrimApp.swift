@@ -188,13 +188,33 @@ struct SentenceListView: View {
     }
 }
 
+/// 直接承载 AVKit 的 AVPlayerView。
+/// 不用 SwiftUI 的 VideoPlayer：那是 _AVKit_SwiftUI 的包装类，release 死代码
+/// 剥离会裁掉未被直接引用的 AVKit 链接，运行时按名字解析父类 AVPlayerView
+/// 失败直接 abort（M1 实测崩溃）。强引用 AVPlayerView 从根上消除该问题。
+struct PlayerHostView: NSViewRepresentable {
+    let player: AVPlayer
+
+    func makeNSView(context: Context) -> AVPlayerView {
+        let view = AVPlayerView()
+        view.player = player
+        view.controlsStyle = .inline
+        view.showsFullScreenToggleButton = false
+        return view
+    }
+
+    func updateNSView(_ view: AVPlayerView, context: Context) {
+        if view.player !== player { view.player = player }
+    }
+}
+
 struct PreviewPane: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
         VStack(spacing: 0) {
             if let player = model.player {
-                VideoPlayer(player: player)
+                PlayerHostView(player: player)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 Color.black

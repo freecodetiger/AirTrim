@@ -47,10 +47,13 @@ final class AppModel: ObservableObject {
         let fm = FileManager.default
         guard let entries = try? fm.contentsOfDirectory(
             at: appSupportModels, includingPropertiesForKeys: nil) else { return nil }
-        return entries.first { url in
-            (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil))?
-                .contains { $0.pathExtension == "mlmodelc" } ?? false
-        }
+        // contentsOfDirectory(at:) 不跟随软链：先解析成真实路径再探测/返回
+        return entries
+            .map { $0.resolvingSymlinksInPath() }
+            .first { url in
+                (try? fm.contentsOfDirectory(at: url, includingPropertiesForKeys: nil))?
+                    .contains { $0.pathExtension == "mlmodelc" } ?? false
+            }
     }
 
     func chooseModelFolder() {

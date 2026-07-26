@@ -97,6 +97,7 @@ public struct WhisperKitTranscriber: Transcriber {
         return Transcript(
             words: words,
             sentences: SentenceSegmenter.sentences(words: words),
+            silences: silences,
             sourceDuration: duration
         )
     }

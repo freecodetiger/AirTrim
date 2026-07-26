@@ -32,12 +32,22 @@ public struct TranscriptSentence: Sendable, Equatable {
 public struct Transcript: Sendable, Equatable {
     public let words: [TranscriptWord]
     public let sentences: [TranscriptSentence]
+    /// VAD 真静音（M2 起随转写产出；PauseAnalyzer 的交叉验证输入）
+    public let silences: [SilenceInterval]
     public let sourceDuration: CMTime
 
-    public init(words: [TranscriptWord], sentences: [TranscriptSentence], sourceDuration: CMTime) {
+    public init(words: [TranscriptWord], sentences: [TranscriptSentence],
+                silences: [SilenceInterval] = [], sourceDuration: CMTime) {
         self.words = words
         self.sentences = sentences
+        self.silences = silences
         self.sourceDuration = sourceDuration
+    }
+
+    /// 旧快照补挂 silences（Transcript 不可变，产出新值）
+    public func withSilences(_ silences: [SilenceInterval]) -> Transcript {
+        Transcript(words: words, sentences: sentences,
+                   silences: silences, sourceDuration: sourceDuration)
     }
 
     public func sentenceText(_ s: TranscriptSentence) -> String {

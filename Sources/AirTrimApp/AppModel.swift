@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var transcribeFraction: Double?
     @Published private(set) var transcript: Transcript?
     @Published private(set) var session = EditSession()
+    /// 轨道波形背景（显示值，随项目文档持久化）
+    @Published private(set) var waveformPeaks: [Float]?
     @Published var sourceURL: URL?
 
     // 预览（UI 派生状态）
@@ -120,9 +122,11 @@ final class AppModel: ObservableObject {
             session = EditSession(current: .init(patch: doc.patch,
                                                  edits: doc.edits ?? EditList(),
                                                  suggestions: doc.suggestions ?? []))
+            waveformPeaks = doc.waveformPeaks
             setupPlayer(url: url)
             refreshDerived()
             stage = .editor
+            backfillDerivedAudioIfNeeded(url: url)
             return
         }
         guard let modelFolder else { stage = .needsModel; return }
@@ -146,15 +150,39 @@ final class AppModel: ObservableObject {
                 }
                 self.transcript = result
                 self.session = EditSession()
+                self.waveformPeaks = WaveformPeaks.compute(samples: pcm)
                 self.setupPlayer(url: url)
                 self.refreshDerived()
                 self.stage = .editor
-                ProjectStore.save(source: url, transcript: result, snapshot: self.session.current)
+                ProjectStore.save(source: url, transcript: result, snapshot: self.session.current,
+                                  waveformPeaks: self.waveformPeaks)
             } catch let error as MediaEngineError {
                 self.stage = .failed(error.localizedDescription)
             } catch {
                 // 非媒体错误大概率是模型加载/推理失败——给出可行动的出路
                 self.stage = .failed("转写失败：\(error.localizedDescription)\n若模型文件不完整，可在「设置 → 模型」重新下载校验。")
+            }
+        }
+    }
+
+    /// v1 缓存补挂派生音频数据：silences（M2 分析输入）+ 波形峰值。
+    /// 后台补算一次并回写；期间编辑不受阻（建议延迟出现，设计 m2 §7）。
+    private func backfillDerivedAudioIfNeeded(url: URL) {
+        guard let current = transcript,
+              current.silences.isEmpty || waveformPeaks == nil else { return }
+        Task {
+            guard let pcm = try? await PCMExtractor.monoPCM(url: url) else { return }
+            let (silences, peaks) = await Task.detached {
+                (EnergyVAD.silences(samples: pcm, sampleRate: PCMExtractor.sampleRate),
+                 WaveformPeaks.compute(samples: pcm))
+            }.value
+            guard self.sourceURL == url, let t = self.transcript else { return }
+            if t.silences.isEmpty { self.transcript = t.withSilences(silences) }
+            if self.waveformPeaks == nil { self.waveformPeaks = peaks }
+            if let updated = self.transcript {
+                ProjectStore.save(source: url, transcript: updated,
+                                  snapshot: self.session.current,
+                                  waveformPeaks: self.waveformPeaks)
             }
         }
     }
@@ -263,6 +291,7 @@ final class AppModel: ObservableObject {
         player = nil
         transcript = nil
         session = EditSession()
+        waveformPeaks = nil
         sourceURL = nil
         currentSentenceStart = nil
         currentCueText = nil

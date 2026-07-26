@@ -7,25 +7,25 @@
 
 | 关注点 | 唯一 owner | 位置 | 守卫 |
 |---|---|---|---|
-| 源媒体访问（只读）· 解码 · 音频抽取 | `MediaEngine` | `Sources/AirCutCore/MediaEngine/` | — |
+| 源媒体访问（只读）· 解码 · 音频抽取 | `MediaEngine` | `Sources/AirTrimCore/MediaEngine/` | — |
 | 预览合成（AVMutableComposition） | `MediaEngine` | 同上 | — |
 | 导出 · 字幕烧录 | `MediaEngine` | 同上 | — |
-| VAD 静音检测 → `[SilenceInterval]` | `SpeechPipeline` | `Sources/AirCutCore/SpeechPipeline/` | — |
+| VAD 静音检测 → `[SilenceInterval]` | `SpeechPipeline` | `Sources/AirTrimCore/SpeechPipeline/` | — |
 | ASR 转写 · 词级时间戳 → `Transcript` | `SpeechPipeline` | 同上 | — |
 | **时间戳权威值**（`CMTime`） | `SpeechPipeline` 产出，全局只读消费 | — | 代码评审 |
-| 停顿建议 | `PauseAnalyzer` | `Sources/AirCutCore/Analysis/` | 无 AVFoundation（脚本） |
+| 停顿建议 | `PauseAnalyzer` | `Sources/AirTrimCore/Analysis/` | 无 AVFoundation（脚本） |
 | 语气词建议 | `FillerAnalyzer` | 同上 | 同上 |
 | 废话建议（结合全文） | `VerbosityAnalyzer` | 同上 | 同上 |
-| 网络调用 · BYOK Key 管理（Keychain） | `LLMProvider` | `Sources/AirCutCore/LLMProvider/` | URLSession 仅此目录（脚本） |
-| **剪辑状态**：`EditList` · suggestion 生命周期 · undo | `EditModel` | `Sources/AirCutCore/EditModel/` | 代码评审 |
-| UI 全部 | `AirCutApp` | `Sources/AirCutApp/` | Core 无 SwiftUI/AppKit（脚本） |
+| 网络调用 · BYOK Key 管理（Keychain） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` | URLSession 仅此目录（脚本） |
+| **剪辑状态**：`EditList` · suggestion 生命周期 · undo | `EditModel` | `Sources/AirTrimCore/EditModel/` | 代码评审 |
+| UI 全部 | `AirTrimApp` | `Sources/AirTrimApp/` | Core 无 SwiftUI/AppKit（脚本） |
 
 ## 分层与依赖方向
 
 ```
-AirCutApp（SwiftUI/AppKit · UI）
+AirTrimApp（SwiftUI/AppKit · UI）
    ↓ 只依赖协议 + 值类型
-AirCutCore
+AirTrimCore
    ├── 纯值类型层：EditModel · Analysis        ← 无系统框架依赖（CoreMedia 除外）
    └── 适配层：    MediaEngine（AVFoundation）
                    SpeechPipeline（ASR/VAD 模型）

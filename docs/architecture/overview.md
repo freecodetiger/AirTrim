@@ -1,4 +1,4 @@
-# AirCut 架构总览
+# AirTrim 架构总览
 
 > 状态：设计阶段（pre-alpha），尚无实现。本文是所有实现的依据；与 ADR 冲突时以 ADR 为准。
 
@@ -43,7 +43,7 @@
 | `Analysis` | 纯值类型层 | 三个分析器，纯函数：`(Transcript, [SilenceInterval], 配置) → [EditSuggestion]`。不 import AVFoundation。 |
 | `LLMProvider` | 网络适配层 | BYOK provider 协议（Claude / OpenAI / DeepSeek / Ollama）。整个 Core 唯一允许联网的模块；只发送文字稿。 |
 | `EditModel` | 纯值类型层 | `EditList`、suggestion 生命周期、undo（快照栈）。剪辑状态唯一真相源。 |
-| `AirCutApp` | UI | 文字稿编辑器（主界面）、波形时间线（辅助）、建议审阅面板、导出与设置。只依赖 Core 的协议 + 值类型。 |
+| `AirTrimApp` | UI | 文字稿编辑器（主界面）、波形时间线（辅助）、建议审阅面板、导出与设置。只依赖 Core 的协议 + 值类型。 |
 
 ## 4. 核心数据模型（全部值类型 · Sendable · 可直接单测）
 

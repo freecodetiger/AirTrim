@@ -1,4 +1,4 @@
-# Contributing to AirCut
+# Contributing to AirTrim
 
 感谢关注！当前项目处于 **文档建设阶段（pre-alpha）**，最有价值的贡献是：审阅设计文档（`docs/`）、参与 ADR 讨论、提供中文口播测试素材反馈。
 

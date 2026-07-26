@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# AirCut 分层守卫 —— 与 CLAUDE.md「禁止事项」一一对应，本地与 CI 都跑。
+# AirTrim 分层守卫 —— 与 CLAUDE.md「禁止事项」一一对应，本地与 CI 都跑。
 #
 # 规则：
-#   1) AirCutCore 不得 import SwiftUI / AppKit（UI 只属于 AirCutApp）
-#   2) 网络代码（URLSession/URLRequest）只允许出现在 Sources/AirCutCore/LLMProvider/
+#   1) AirTrimCore 不得 import SwiftUI / AppKit（UI 只属于 AirTrimApp）
+#   2) 网络代码（URLSession/URLRequest）只允许出现在 Sources/AirTrimCore/LLMProvider/
 #      —— 这是「音视频永不上传、云端只见文字稿」的架构级保证
 #   3) Analysis/ 是纯值类型层，不得 import AVFoundation
 set -euo pipefail
@@ -30,15 +30,15 @@ check() {
 
 check "Core 不含 SwiftUI/AppKit" \
       '^[[:space:]]*import (SwiftUI|AppKit)' \
-      Sources/AirCutCore
+      Sources/AirTrimCore
 
 check "网络调用仅限 LLMProvider" \
       'URLSession|URLRequest' \
-      Sources/AirCutCore \
-      "Sources/AirCutCore/LLMProvider/"
+      Sources/AirTrimCore \
+      "Sources/AirTrimCore/LLMProvider/"
 
 check "Analysis 纯值类型（无 AVFoundation）" \
       '^[[:space:]]*import AVFoundation' \
-      Sources/AirCutCore/Analysis
+      Sources/AirTrimCore/Analysis
 
 exit $fail

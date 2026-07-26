@@ -9,7 +9,7 @@ description: 改动 VAD、ASR 转写、词级时间戳、Transcript 结构、模
 
 1. **时间戳的唯一来源**：全项目所有 `CMTime` 权威值都产自本模块（ASR 词边界 + VAD 静音区间）。任何其他模块换算/修正时间戳都必须回到这里的数据，不许自造。
 2. `Transcript` 是**不可变快照**：改错字/调断句产生新 `Transcript`（词时间戳不变，只动文本与句划分）；重转写整体替换。
-3. 模型不入库：运行时下载到 `~/Library/Application Support/AirCut/Models/`，带校验与断点续传；仓库内实验模型放 `Models/`（已 gitignore）。
+3. 模型不入库：运行时下载到 `~/Library/Application Support/AirTrim/Models/`，带校验与断点续传；仓库内实验模型放 `Models/`（已 gitignore）。
 
 ## 静音 vs 词间隙的分工（容易混）
 

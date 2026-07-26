@@ -1,8 +1,8 @@
-# AirCut
+# AirTrim
 
 > Open-source, native macOS editor for talking-head videos: transcribe locally, edit video by editing text, and tighten your cut in one click — remove pauses, filler words, and context-aware rambling. Chinese-first.
 
-AirCut 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作者。它不是另一个多轨剪辑器——它相信：**对口播视频，文字稿才是最高效的剪辑界面**。
+AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作者。它不是另一个多轨剪辑器——它相信：**对口播视频，文字稿才是最高效的剪辑界面**。
 
 ```
 导入视频 → 本地转写（词级时间戳）→ 文字稿即剪辑

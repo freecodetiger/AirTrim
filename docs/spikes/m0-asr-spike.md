@@ -35,10 +35,10 @@
 
 ## 执行方式
 
-1. 新增 SPM executable target `AirCutSpike`（spike 专用，不进入产品依赖图）。
+1. 新增 SPM executable target `AirTrimSpike`（spike 专用，不进入产品依赖图）。
 2. 每个候选跑同一评测集，脚本输出误差分布（中位/P95/直方图）+ RTF + CER。
 3. **耳朵验收**：用词级时间戳直接生成"删除所有 ≥500ms 停顿"的剪辑成片（AVMutableComposition 导出），听切点是否自然——这同时验证了 MediaEngine 路径的可行性。
-4. 报告 + 决策写入 ADR-0006；spike 代码保留在 `Sources/AirCutSpike/` 供回归复测。
+4. 报告 + 决策写入 ADR-0006；spike 代码保留在 `Sources/AirTrimSpike/` 供回归复测。
 
 ## 失败预案
 

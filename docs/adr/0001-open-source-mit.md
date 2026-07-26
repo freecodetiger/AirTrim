@@ -12,7 +12,7 @@
 1. 许可证 **MIT**。
 2. 依赖只允许 MIT / Apache-2.0 / BSD 系；**禁止 GPL/LGPL 依赖**（这直接排除了 ffmpeg 常见构建，见 ADR-0002）。
 3. 分发走 **Notarized DMG + Homebrew Cask**，不进 Mac App Store（避开沙盒对文件访问/辅助能力的限制；开源用户习惯 brew）。
-4. 仓库不 vendor 任何二进制；ASR 模型运行时下载到 `~/Library/Application Support/AirCut/Models/`。
+4. 仓库不 vendor 任何二进制；ASR 模型运行时下载到 `~/Library/Application Support/AirTrim/Models/`。
 5. 云端 AI 一律 **BYOK**（用户自带 Key，见 ADR-0003）。
 
 ## 后果

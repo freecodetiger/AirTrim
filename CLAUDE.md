@@ -1,4 +1,4 @@
-# AirCut · AI 开发指南
+# AirTrim · AI 开发指南
 
 > 本文件是 Agent 进入项目的**唯一入口**，只放最高优先级规则。
 > 各域细节在 `.claude/skills/` 与 `docs/`，用到时再查。
@@ -8,7 +8,7 @@
 
 ## 项目目标（Project Goal）
 
-AirCut 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作者：
+AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作者：
 
 ```
 导入视频 → 本地转写（词级时间戳）→ 文字稿即剪辑界面
@@ -33,7 +33,7 @@ AirCut 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作
 - **云端只见文字稿。** 音频/视频字节绝不上传；网络调用只允许出现在 `LLMProvider/`（脚本守卫）。
 - **建议式编辑。** 三个分析器（停顿/语气词/废话）输出统一为 `EditSuggestion`；废话（verbosity）建议**必须人工确认**，绝不自动应用。UI 只有一套审阅交互。
 - **剪切点必须自然。** 零间隙硬拼是禁令：最小停顿保留 + 音频 crossfade + 词边界 padding，参数见 `cut-quality` skill。
-- **`AirCutCore` 绝不 `import SwiftUI`/`AppKit`**；`Analysis/` 纯值类型，不 `import AVFoundation`。（由 `scripts/check-architecture.sh` 守卫。）
+- **`AirTrimCore` 绝不 `import SwiftUI`/`AppKit`**；`Analysis/` 纯值类型，不 `import AVFoundation`。（由 `scripts/check-architecture.sh` 守卫。）
 - **不重新发明架构，扩展现有架构。**
 
 ---
@@ -42,14 +42,14 @@ AirCut 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作
 
 | 关注点 | 唯一 owner | 位置 |
 |---|---|---|
-| 媒体解码 · 音频抽取 · 预览合成 · 导出/烧录 | `MediaEngine` | `Sources/AirCutCore/MediaEngine/` |
-| VAD 静音检测 + ASR 转写（词级时间戳）→ `Transcript` | `SpeechPipeline` | `Sources/AirCutCore/SpeechPipeline/` |
-| 停顿分析 | `PauseAnalyzer` | `Sources/AirCutCore/Analysis/` |
-| 语气词分析 | `FillerAnalyzer` | `Sources/AirCutCore/Analysis/` |
-| 结合全文的废话分析 | `VerbosityAnalyzer` | `Sources/AirCutCore/Analysis/` |
-| 云端 LLM 调用（BYOK · 唯一联网点） | `LLMProvider` | `Sources/AirCutCore/LLMProvider/` |
-| 剪辑状态（EditList / suggestion 生命周期 / undo） | `EditModel` | `Sources/AirCutCore/EditModel/` |
-| UI（文字稿编辑器 · 时间线 · 审阅 · 设置） | `AirCutApp` | `Sources/AirCutApp/` |
+| 媒体解码 · 音频抽取 · 预览合成 · 导出/烧录 | `MediaEngine` | `Sources/AirTrimCore/MediaEngine/` |
+| VAD 静音检测 + ASR 转写（词级时间戳）→ `Transcript` | `SpeechPipeline` | `Sources/AirTrimCore/SpeechPipeline/` |
+| 停顿分析 | `PauseAnalyzer` | `Sources/AirTrimCore/Analysis/` |
+| 语气词分析 | `FillerAnalyzer` | `Sources/AirTrimCore/Analysis/` |
+| 结合全文的废话分析 | `VerbosityAnalyzer` | `Sources/AirTrimCore/Analysis/` |
+| 云端 LLM 调用（BYOK · 唯一联网点） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` |
+| 剪辑状态（EditList / suggestion 生命周期 / undo） | `EditModel` | `Sources/AirTrimCore/EditModel/` |
+| UI（文字稿编辑器 · 时间线 · 审阅 · 设置） | `AirTrimApp` | `Sources/AirTrimApp/` |
 
 依赖方向：`App → Core`；Core 内 `Analysis`/`EditModel` 是纯值类型层，`MediaEngine`/`SpeechPipeline`/`LLMProvider` 是系统框架/网络适配层。**禁止回指。**
 
@@ -78,7 +78,7 @@ AirCut 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作
 - ❌ `URLSession` / 网络代码出现在 `LLMProvider/` 之外。
 - ❌ 自动应用 verbosity（废话）建议。
 - ❌ 剪切点零间隙硬拼（必须最小停顿保留 + crossfade，见 `cut-quality` skill）。
-- ❌ `AirCutCore` 里 `import SwiftUI`/`AppKit`；`Analysis/` 里 `import AVFoundation`。
+- ❌ `AirTrimCore` 里 `import SwiftUI`/`AppKit`；`Analysis/` 里 `import AVFoundation`。
 - ❌ 引入 ffmpeg 依赖（ADR-0002；许可与分发原因）。
 - ❌ 未被明确要求就重新设计架构 / 管线。
 
@@ -115,5 +115,5 @@ scripts/check-architecture.sh    # 分层守卫（Core 无 UI；网络仅 LLMPro
 ## 现状备注
 
 - **项目处于文档建设阶段（pre-alpha）**：`Sources/` 下只有骨架占位，真实实现从 M0 ASR spike（`docs/spikes/m0-asr-spike.md`）开始，路线见 `docs/roadmap.md`。
-- "AirCut" 是**工作名**，发布前可全局替换改名。
+- 项目名 **AirTrim** 已定（2026-07 由工作名 "AirCut" 更名，避免与 CapCut 撞名及 haircut 谐音）。
 - 文档索引：`docs/architecture/overview.md`（总设计）· `ownership-map.md`（职责表）· `docs/adr/`（决策记录）· `docs/roadmap.md`（里程碑）· `docs/spikes/`（技术验证）。

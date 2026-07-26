@@ -2,25 +2,25 @@
 import PackageDescription
 
 let package = Package(
-    name: "AirCut",
+    name: "AirTrim",
     platforms: [.macOS(.v14)],
     products: [
-        .library(name: "AirCutCore", targets: ["AirCutCore"]),
-        .executable(name: "AirCutApp", targets: ["AirCutApp"]),
+        .library(name: "AirTrimCore", targets: ["AirTrimCore"]),
+        .executable(name: "AirTrimApp", targets: ["AirTrimApp"]),
     ],
     targets: [
         .target(
-            name: "AirCutCore",
+            name: "AirTrimCore",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
-            name: "AirCutApp",
-            dependencies: ["AirCutCore"],
+            name: "AirTrimApp",
+            dependencies: ["AirTrimCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
-            name: "AirCutCoreTests",
-            dependencies: ["AirCutCore"],
+            name: "AirTrimCoreTests",
+            dependencies: ["AirTrimCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

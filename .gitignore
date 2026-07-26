@@ -1,0 +1,18 @@
+# Swift / SPM
+.build/
+.swiftpm/
+*.xcodeproj
+xcuserdata/
+
+# macOS
+.DS_Store
+
+# Claude Code 本地配置
+.claude/settings.local.json
+
+# 本地下载的 ASR 模型（运行时下载到 Application Support，绝不入库；
+# 若临时放在仓库内做实验，也统一放 Models/ 并忽略）
+Models/
+
+# 私有测试素材（真实口播视频不入库；公共小样例放 Fixtures/public/）
+Fixtures/private/

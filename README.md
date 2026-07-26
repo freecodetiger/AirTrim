@@ -21,14 +21,26 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 
 ## 状态
 
-🚧 **Pre-alpha · 文档建设阶段。** 当前仓库是架构骨架 + 设计文档，尚无可用功能。路线：
+🚧 **Alpha · M1（字幕工具）功能就绪，发布打磨中。** 已可用：
 
-1. **M0** — ASR 技术验证：中文词级时间戳精度达标才往下走
-2. **M1** — 转写 + 字幕编辑 + SRT 导出 / 烧录
-3. **M2** — 静音检测 + 一键紧凑 + 时间线预览
-4. **M3** — 语气词 + LLM 废话建议 + 审阅界面
+- 导入口播视频 → **全本地**转写（WhisperKit large-v3，词级时间戳，中文优化）
+- 逐句编辑器：改错字、拆句/合句、整句试听、当前句跟随高亮
+- **AI 语义断句**（可选）：OpenAI 兼容 API 自带 Key（DeepSeek 等）；只上传文字稿，时间戳永远来自本地
+- 导出 SRT / **字幕烧录 MP4**（白字黑边、竖拍横拍自适应；源文件只读，输出新文件）
+- 项目持久化：重启秒恢复上次会话，每次修订即落盘
+- 应用内模型下载（3.1 GB，断点续传，国内自动走镜像源）
 
-详见 [docs/roadmap.md](docs/roadmap.md)。
+路线：**M0** ASR 验证（✅ 已达标，[报告](docs/spikes/results/koubo-01-whisperkit-large-v3.md)）→ **M1** 字幕工具（当前）→ **M2** 一键紧凑 → **M3** AI 建议闭环。详见 [docs/roadmap.md](docs/roadmap.md)。
+
+> M0 过程中发现并修复了 WhisperKit 的中文词级时间戳截断 bug（语言检测返回 `zh-Hans` 未命中白名单 `zh`），已向上游提交 [issue #510](https://github.com/argmaxinc/argmax-oss-swift/issues/510) 与 [PR #511](https://github.com/argmaxinc/argmax-oss-swift/pull/511)；合并前应用内置逐字切词兜底。
+
+## 使用
+
+1. `scripts/make-app.sh` 构建 `build/AirTrim.app`，双击启动（正式 DMG 见 Releases，发布后提供）。
+2. 首次启动引导下载语音模型（一次性，3.1 GB）。
+3. 拖入口播视频 → 等待本地转写（有真实进度条）→ 逐句编辑。
+4. 可选：设置（⌘,）→ AI 服务 填入 OpenAI 兼容 API 地址与 Key，工具栏「AI 断句」按语义重新断句。
+5. 工具栏导出 SRT，或「导出视频」直接烧录字幕。
 
 ## 设计文档
 
@@ -42,14 +54,19 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 要求：macOS 14+，Xcode 15+（Swift 6.1）。
 
 ```bash
-swift build
-swift test
-scripts/check-architecture.sh
+swift build                      # 构建
+swift test                       # 全量测试（swift-testing）
+scripts/check-architecture.sh    # 分层守卫（Core 无 UI；网络仅 LLMProvider）
+scripts/make-app.sh              # 打包 build/AirTrim.app（含图标，ad-hoc 签名）
+scripts/make-dmg.sh              # 打包 build/AirTrim-<版本>.dmg
 ```
+
+发布流程（签名 / 公证 / Homebrew Cask）见 [docs/release.md](docs/release.md)；
+发版前回归清单见 [docs/release-checklist.md](docs/release-checklist.md)。
 
 ## 技术栈
 
-Swift 6 · SwiftUI/AppKit · AVFoundation（无 ffmpeg 依赖）· WhisperKit / FunASR（M0 后定）· BYOK LLM（Claude / OpenAI / DeepSeek / Ollama）
+Swift 6 · SwiftUI/AppKit · AVFoundation（无 ffmpeg 依赖）· WhisperKit（ADR-0006）· BYOK LLM（OpenAI 兼容格式：DeepSeek / OpenAI / Ollama…）
 
 ## License
 

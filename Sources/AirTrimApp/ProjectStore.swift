@@ -10,6 +10,10 @@ struct ProjectDocument: Codable {
     let transcript: Transcript
     var patch: TranscriptPatch
     var savedAt: Date
+    // M2 起（可选字段，M1 缓存解码为 nil 不炸）
+    var edits: EditList?
+    var suggestions: [EditSuggestion]?
+    var waveformPeaks: [Float]?
 }
 
 enum ProjectStore {
@@ -44,10 +48,15 @@ enum ProjectStore {
         return doc
     }
 
-    static func save(source: URL, transcript: Transcript, patch: TranscriptPatch) {
+    static func save(source: URL, transcript: Transcript, snapshot: EditSession.Snapshot,
+                     waveformPeaks: [Float]? = nil) {
         guard let fp = fingerprint(of: source) else { return }
+        // 峰值只在显式提供时覆盖，否则保留已存的（避免每次修订都丢波形）
+        let peaks = waveformPeaks ?? load(for: source)?.waveformPeaks
         let doc = ProjectDocument(sourcePath: source.path, fingerprint: fp,
-                                  transcript: transcript, patch: patch, savedAt: Date())
+                                  transcript: transcript, patch: snapshot.patch, savedAt: Date(),
+                                  edits: snapshot.edits, suggestions: snapshot.suggestions,
+                                  waveformPeaks: peaks)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(doc) {
             try? data.write(to: fileURL(fingerprint: fp), options: .atomic)

@@ -7,7 +7,8 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// 应用状态机（组合根）：编排 MediaEngine 抽音频 → SpeechPipeline 转写，
-/// 持有 Transcript 快照与 PatchSession；播放头是派生显示值，不是第二份时间状态。
+/// 持有 Transcript 快照与 EditSession（修订+剪辑+建议的唯一 undo 栈）；
+/// 播放头是派生显示值，不是第二份时间状态。
 @MainActor
 final class AppModel: ObservableObject {
     enum Stage {
@@ -23,7 +24,7 @@ final class AppModel: ObservableObject {
     @Published private(set) var transcribePhaseText = ""
     @Published private(set) var transcribeFraction: Double?
     @Published private(set) var transcript: Transcript?
-    @Published private(set) var patches = PatchSession()
+    @Published private(set) var session = EditSession()
     @Published var sourceURL: URL?
 
     // 预览（UI 派生状态）
@@ -116,7 +117,9 @@ final class AppModel: ObservableObject {
         if !forceRetranscribe, let doc = ProjectStore.load(for: url) {
             sourceURL = url
             transcript = doc.transcript
-            patches = PatchSession(current: doc.patch)
+            session = EditSession(current: .init(patch: doc.patch,
+                                                 edits: doc.edits ?? EditList(),
+                                                 suggestions: doc.suggestions ?? []))
             setupPlayer(url: url)
             refreshDerived()
             stage = .editor
@@ -142,11 +145,11 @@ final class AppModel: ObservableObject {
                     Task { @MainActor [weak self] in self?.apply(phase) }
                 }
                 self.transcript = result
-                self.patches = PatchSession()
+                self.session = EditSession()
                 self.setupPlayer(url: url)
                 self.refreshDerived()
                 self.stage = .editor
-                ProjectStore.save(source: url, transcript: result, patch: self.patches.current)
+                ProjectStore.save(source: url, transcript: result, snapshot: self.session.current)
             } catch let error as MediaEngineError {
                 self.stage = .failed(error.localizedDescription)
             } catch {
@@ -179,41 +182,41 @@ final class AppModel: ObservableObject {
 
     var sentences: [TranscriptSentence] {
         guard let transcript else { return [] }
-        return patches.current.effectiveSentences(in: transcript)
+        return session.current.patch.effectiveSentences(in: transcript)
     }
 
     func sentenceText(_ s: TranscriptSentence) -> String {
         guard let transcript else { return "" }
-        return patches.current.text(for: s, in: transcript)
+        return session.current.patch.text(for: s, in: transcript)
     }
 
     func updateSentence(_ s: TranscriptSentence, text: String) {
         guard let transcript else { return }
         let original = transcript.sentenceText(s)
-        guard text != patches.current.text(for: s, in: transcript) else { return }
-        patches.apply {
-            $0.overrideText(sentenceStartingAt: s.words.lowerBound, original: original, text: text)
+        guard text != session.current.patch.text(for: s, in: transcript) else { return }
+        session.apply {
+            $0.patch.overrideText(sentenceStartingAt: s.words.lowerBound, original: original, text: text)
         }
         refreshDerived()
     }
 
     func splitSentence(before wordIndex: Int) {
         guard let transcript else { return }
-        patches.apply { $0.split(before: wordIndex, in: transcript) }
+        session.apply { $0.patch.split(before: wordIndex, in: transcript) }
         refreshDerived()
     }
 
     func mergeWithPrevious(_ s: TranscriptSentence) {
         guard let transcript else { return }
-        patches.apply { $0.mergeWithPrevious(sentenceStartingAt: s.words.lowerBound, in: transcript) }
+        session.apply { $0.patch.mergeWithPrevious(sentenceStartingAt: s.words.lowerBound, in: transcript) }
         refreshDerived()
     }
 
     func undo() {
-        if patches.undo() { refreshDerived() }
+        if session.undo() { refreshDerived() }
     }
 
-    // MARK: - AI 语义断句（LLMProvider · 只上传文字稿 · 结果走 PatchSession 可 undo）
+    // MARK: - AI 语义断句（LLMProvider · 只上传文字稿 · 结果走 EditSession 可 undo）
 
     @Published var aiSegmenting = false
     @Published var aiError: String?
@@ -229,7 +232,7 @@ final class AppModel: ObservableObject {
             do {
                 let segmenter = SemanticSegmenter(client: OpenAIChatClient(config: config))
                 let starts = try await segmenter.proposeSentenceStarts(for: transcript)
-                patches.apply { $0.sentenceStarts = starts }
+                session.apply { $0.patch.sentenceStarts = starts }
                 refreshDerived()
             } catch {
                 aiError = error.localizedDescription
@@ -240,10 +243,10 @@ final class AppModel: ObservableObject {
 
     private func refreshDerived() {
         guard let transcript else { cachedCues = []; return }
-        cachedCues = Subtitles.cues(transcript: transcript, patch: patches.current)
+        cachedCues = Subtitles.cues(transcript: transcript, patch: session.current.patch)
         // 每次修订即持久化（~100KB JSON，原子写）；关闭/崩溃零丢失
         if let sourceURL {
-            ProjectStore.save(source: sourceURL, transcript: transcript, patch: patches.current)
+            ProjectStore.save(source: sourceURL, transcript: transcript, snapshot: session.current)
         }
         objectWillChange.send()
     }
@@ -259,7 +262,7 @@ final class AppModel: ObservableObject {
         timeObserver = nil
         player = nil
         transcript = nil
-        patches = PatchSession()
+        session = EditSession()
         sourceURL = nil
         currentSentenceStart = nil
         currentCueText = nil
@@ -323,7 +326,7 @@ final class AppModel: ObservableObject {
             self.stopAt = nil
         }
         guard let transcript else { return }
-        let sentence = patches.current.effectiveSentences(in: transcript).last { s in
+        let sentence = session.current.patch.effectiveSentences(in: transcript).last { s in
             guard let range = transcript.sentenceRange(s) else { return false }
             return CMTimeCompare(range.start, time) <= 0
         }

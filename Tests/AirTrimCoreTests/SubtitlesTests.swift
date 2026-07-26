@@ -104,16 +104,16 @@ struct PatchTests {
     }
 
     @Test func undoRestoresPreviousState() {
-        var session = PatchSession()
-        session.apply { $0.textOverrides[0] = "改一" }
-        session.apply { $0.textOverrides[0] = "改二" }
-        #expect(session.current.textOverrides[0] == "改二")
+        var session = EditSession()
+        session.apply { $0.patch.textOverrides[0] = "改一" }
+        session.apply { $0.patch.textOverrides[0] = "改二" }
+        #expect(session.current.patch.textOverrides[0] == "改二")
         let undo1 = session.undo()
         #expect(undo1)
-        #expect(session.current.textOverrides[0] == "改一")
+        #expect(session.current.patch.textOverrides[0] == "改一")
         let undo2 = session.undo()
         #expect(undo2)
-        #expect(session.current.textOverrides.isEmpty)
+        #expect(session.current.patch.textOverrides.isEmpty)
         let undo3 = session.undo()
         #expect(!undo3)
     }

@@ -17,7 +17,7 @@ struct AirTrimApp: App {
             CommandGroup(after: .undoRedo) {
                 Button("撤销修订") { model.undo() }
                     .keyboardShortcut("z", modifiers: .command)
-                    .disabled(!model.patches.canUndo)
+                    .disabled(!model.session.canUndo)
             }
             CommandGroup(after: .newItem) {
                 Button("打开视频…") { model.chooseVideo() }
@@ -280,7 +280,7 @@ struct EditorView: View {
                 } label: {
                     Label("撤销", systemImage: "arrow.uturn.backward")
                 }
-                .disabled(!model.patches.canUndo)
+                .disabled(!model.session.canUndo)
 
                 Button {
                     model.aiResegment()
@@ -424,7 +424,7 @@ struct SentenceRow: View {
     }
 
     var edited: Bool {
-        model.patches.current.textOverrides[sentence.words.lowerBound] != nil
+        model.session.current.patch.textOverrides[sentence.words.lowerBound] != nil
     }
 
     var body: some View {

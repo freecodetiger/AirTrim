@@ -63,28 +63,5 @@ public struct TranscriptPatch: Sendable, Equatable, Codable {
     }
 }
 
-/// undo = 快照栈（overview §4 EditSession 同款模式；M2 的 EditList 将并入同一会话）。
-public struct PatchSession: Sendable, Equatable {
-    public private(set) var current: TranscriptPatch
-    public private(set) var history: [TranscriptPatch]
-
-    public init(current: TranscriptPatch = TranscriptPatch()) {
-        self.current = current
-        self.history = []
-    }
-
-    /// 修改前先入栈快照
-    public mutating func apply(_ mutate: (inout TranscriptPatch) -> Void) {
-        history.append(current)
-        mutate(&current)
-    }
-
-    @discardableResult
-    public mutating func undo() -> Bool {
-        guard let last = history.popLast() else { return false }
-        current = last
-        return true
-    }
-
-    public var canUndo: Bool { !history.isEmpty }
-}
+// PatchSession 已并入 EditSession（M2）：修订 + 剪辑 + 建议共用唯一 undo 栈，
+// 见 EditSession.swift。

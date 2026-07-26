@@ -12,8 +12,11 @@ struct EarCheck: AsyncParsableCommand {
     @Option(help: "源视频/音频文件")
     var source: String
 
-    @Option(help: "transcribe 输出的 JSON")
-    var transcript: String
+    @Option(help: "transcribe 输出的 JSON（--vad 模式下可省略）")
+    var transcript: String?
+
+    @Flag(name: .customLong("vad"), help: "用能量 VAD 检测停顿（不依赖 ASR 词时间戳）")
+    var useVAD = false
 
     @Option(name: .customLong("min-gap"), help: "剪除 ≥ 此时长的停顿（秒）")
     var minGap: Double = 0.5
@@ -28,14 +31,27 @@ struct EarCheck: AsyncParsableCommand {
     var output: String
 
     func run() async throws {
-        let t = try SpikeJSON.decode(
-            SpikeTranscript.self,
-            from: try Data(contentsOf: URL(fileURLWithPath: transcript))
-        )
-        let asset = AVURLAsset(url: URL(fileURLWithPath: source))
+        let sourceURL = URL(fileURLWithPath: source)
+        let asset = AVURLAsset(url: sourceURL)
         let duration = try await asset.load(.duration).seconds
 
-        let gaps = CutPlan.silenceGaps(words: t.words, minGap: minGap)
+        let gaps: [ClosedRange<Double>]
+        if useVAD {
+            let samples = try await AudioLoader.loadMonoPCM(url: sourceURL)
+            gaps = EnergyVAD.silences(samples: samples, sampleRate: AudioLoader.sampleRate,
+                                      minDuration: minGap)
+            print("停顿检测：能量 VAD")
+        } else {
+            guard let transcript else {
+                throw ValidationError("需要 --transcript，或改用 --vad")
+            }
+            let t = try SpikeJSON.decode(
+                SpikeTranscript.self,
+                from: try Data(contentsOf: URL(fileURLWithPath: transcript))
+            )
+            gaps = CutPlan.silenceGaps(words: t.words, minGap: minGap)
+            print("停顿检测：ASR 词间隙")
+        }
         let cuts = CutPlan.cutRegions(gaps: gaps, minPauseKeep: minPauseKeep, padding: padding)
         let keeps = CutPlan.keepRanges(duration: duration, cuts: cuts)
         guard !keeps.isEmpty else { throw ValidationError("保留区间为空——检查转写与参数") }

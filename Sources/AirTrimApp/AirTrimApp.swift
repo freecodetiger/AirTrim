@@ -19,6 +19,15 @@ struct AirTrimApp: App {
                     .keyboardShortcut("z", modifiers: .command)
                     .disabled(!model.patches.canUndo)
             }
+            CommandGroup(after: .newItem) {
+                Button("打开视频…") { model.chooseVideo() }
+                    .keyboardShortcut("o", modifiers: .command)
+                Button("关闭视频") { model.closeVideo() }
+                    .disabled(model.sourceURL == nil)
+                Divider()
+                Button("重新转写（忽略缓存）") { model.retranscribe() }
+                    .disabled(model.sourceURL == nil)
+            }
         }
 
         Settings {
@@ -129,6 +138,10 @@ struct ImportView: View {
             Text("拖入口播视频，或").font(.title3)
             Button("打开视频…") { model.chooseVideo() }
                 .keyboardShortcut(.defaultAction)
+            if let last = model.lastProjectURL {
+                Button("继续上次：\(last.lastPathComponent)") { model.start(url: last) }
+                    .buttonStyle(.link)
+            }
             Text("源文件只读，永不修改").font(.caption).foregroundStyle(.tertiary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -89,6 +89,16 @@ struct TranscriptPatch: Sendable {          // EditModel 唯一持有
 - ModelInstaller 提前为下一工作项（onboarding 阻断）；分档默认值须先过
   评测（owner 决定测试时机）。
 
+### D7 · 项目持久化（2026-07-27，owner 要求）
+
+- 转写结果 + 修订补丁存 `App Support/AirTrim/Projects/<指纹>.json`；
+  指纹 = 源文件路径+大小+修改时间的 SHA256，源变动即失效重转。
+- **CMTime 以 {value, timescale} 有理数编码**——时间权威规则延伸到磁盘，
+  绝不经过 Double。
+- 每次修订原子写盘（~100KB），关闭/崩溃零丢失；启动自动恢复上次会话；
+  文件菜单提供 打开(⌘O)/关闭/重新转写（忽略缓存）。
+- undo 栈不持久化（会话内语义）；AI 断句、手动拆合句、改字全部随 patch 落盘。
+
 ### D4 · 烧录走 spike 验证过的路径
 
 `AVMutableComposition`（M1 无剪切，整段直通）+ `AVVideoCompositionCoreAnimationTool`

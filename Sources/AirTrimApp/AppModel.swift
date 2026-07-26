@@ -45,6 +45,9 @@ final class AppModel: ObservableObject {
         if let auto = ProcessInfo.processInfo.environment["AIRTRIM_AUTOLOAD"],
            modelFolder != nil {
             start(url: URL(fileURLWithPath: auto))
+        } else if let last = ProjectStore.lastOpenedURL() {
+            // 恢复上次会话（缓存命中秒开；不满足条件则停在导入页）
+            start(url: last)
         }
     }
 
@@ -105,7 +108,17 @@ final class AppModel: ObservableObject {
         start(url: url)
     }
 
-    func start(url: URL) {
+    func start(url: URL, forceRetranscribe: Bool = false) {
+        // 缓存命中：转写 + 修订全部恢复，秒开（持久化设计 D7）
+        if !forceRetranscribe, let doc = ProjectStore.load(for: url) {
+            sourceURL = url
+            transcript = doc.transcript
+            patches = PatchSession(current: doc.patch)
+            setupPlayer(url: url)
+            refreshDerived()
+            stage = .editor
+            return
+        }
         guard let modelFolder else { stage = .needsModel; return }
         sourceURL = url
         stage = .transcribing(fileName: url.lastPathComponent, startedAt: Date())
@@ -124,6 +137,7 @@ final class AppModel: ObservableObject {
                 self.setupPlayer(url: url)
                 self.refreshDerived()
                 self.stage = .editor
+                ProjectStore.save(source: url, transcript: result, patch: self.patches.current)
             } catch {
                 self.stage = .failed(error.localizedDescription)
             }
@@ -196,8 +210,32 @@ final class AppModel: ObservableObject {
     private func refreshDerived() {
         guard let transcript else { cachedCues = []; return }
         cachedCues = Subtitles.cues(transcript: transcript, patch: patches.current)
+        // 每次修订即持久化（~100KB JSON，原子写）；关闭/崩溃零丢失
+        if let sourceURL {
+            ProjectStore.save(source: sourceURL, transcript: transcript, patch: patches.current)
+        }
         objectWillChange.send()
     }
+
+    func retranscribe() {
+        guard let sourceURL else { return }
+        ProjectStore.discard(for: sourceURL)
+        start(url: sourceURL, forceRetranscribe: true)
+    }
+
+    func closeVideo() {
+        if let timeObserver, let player { player.removeTimeObserver(timeObserver) }
+        timeObserver = nil
+        player = nil
+        transcript = nil
+        patches = PatchSession()
+        sourceURL = nil
+        currentSentenceStart = nil
+        currentCueText = nil
+        stage = .idle
+    }
+
+    var lastProjectURL: URL? { ProjectStore.lastOpenedURL() }
 
     // MARK: - 预览播放（UI 层；时间只从 Transcript 派生）
 

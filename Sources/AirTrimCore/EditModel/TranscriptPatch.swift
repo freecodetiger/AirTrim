@@ -6,7 +6,7 @@ import Foundation
 /// 结构模型：句 = 起点词下标的切分；`sentenceStarts` 为 nil 时沿用原始断句。
 /// 文本覆盖以**句起点词下标**为键——拆/合句时未波及句的键天然稳定；
 /// 被拆/合的句子其文本覆盖作废（回到原始转写，v1 策略，undo 可回退）。
-public struct TranscriptPatch: Sendable, Equatable {
+public struct TranscriptPatch: Sendable, Equatable, Codable {
     /// 句起点词下标全量表（升序，首元素恒为 0）；nil = 沿用 Transcript 原始断句
     public var sentenceStarts: [Int]?
     /// 句文本覆盖，键 = 句起点词下标

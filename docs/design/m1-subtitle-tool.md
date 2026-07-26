@@ -99,11 +99,18 @@ struct TranscriptPatch: Sendable {          // EditModel 唯一持有
   文件菜单提供 打开(⌘O)/关闭/重新转写（忽略缓存）。
 - undo 栈不持久化（会话内语义）；AI 断句、手动拆合句、改字全部随 patch 落盘。
 
-### D4 · 烧录走 spike 验证过的路径
+### D4 · 烧录：CoreAnimation 合成 + CoreText 预渲染位图（2026-07-27 实现修订）
 
 `AVMutableComposition`（M1 无剪切，整段直通）+ `AVVideoCompositionCoreAnimationTool`
-叠 `CATextLayer` 逐条字幕 + `AVAssetExportSession` 导出。样式 v1 固定一套
-（白字黑边、底部居中、安全边距），模板化留给 roadmap 的"字幕样式"项。
++ `AVAssetExportSession` 导出。样式 v1 固定一套（白字黑边、底部居中、安全
+边距、竖拍横拍字号自适应），模板化留给 roadmap 的"字幕样式"项。
+
+**实现修订**：原方案的 `CATextLayer` 在离屏导出渲染器里不触发 display，
+出片无字（真机二分定位：纯色层渲染正常、文字层空白）。改为每条 cue 用
+CoreText 预渲染成 `CGImage` 挂在普通 `CALayer.contents` 上，显隐仍由
+opacity 动画在视频时间轴上驱动。竖拍 `preferredTransform` 归一化到渲染
+坐标。回归入口：`airtrim-spike burn --dump-frame`（无头出帧视觉验证）、
+`airtrim-spike srt`（同一纯函数出 SRT）。
 
 ### D5 · 简繁归一化用 ICU transform，零依赖
 

@@ -41,14 +41,36 @@ struct SetupView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        VStack(spacing: 14) {
+        VStack(spacing: 16) {
             Image(systemName: "cpu").font(.system(size: 44)).foregroundStyle(.secondary)
-            Text("需要本地 ASR 模型").font(.title2)
-            Text("AirTrim 完全本地转写，不上传任何音视频。\n请选择 WhisperKit 模型目录（内含 *.mlmodelc），\n或将模型放入 ~/Library/Application Support/AirTrim/Models/")
+            Text("首次使用：下载语音识别模型").font(.title2)
+            Text("AirTrim 完全本地转写，不上传任何音视频。\n模型只需下载一次（3.1 GB，支持断点续传，国内自动走镜像源）。")
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-            Button("选择模型目录…") { model.chooseModelFolder() }
-                .keyboardShortcut(.defaultAction)
+
+            if let progress = model.installProgress {
+                VStack(spacing: 6) {
+                    ProgressView(value: progress.fraction)
+                        .frame(width: 320)
+                    Text("\(Int(progress.fraction * 100))% · \(progress.filesDone)/\(progress.filesTotal) 个文件 · \(progress.currentFile)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+            } else {
+                Button("下载模型（3.1 GB）") { model.downloadModel() }
+                    .keyboardShortcut(.defaultAction)
+                    .controlSize(.large)
+            }
+
+            if let error = model.installError {
+                Text(error).font(.caption).foregroundStyle(.red)
+                Button("重试（从断点继续）") { model.downloadModel() }
+            }
+
+            Divider().frame(width: 240)
+            Button("已有模型？选择目录…") { model.chooseModelFolder() }
+                .buttonStyle(.link)
         }
         .padding(40)
     }

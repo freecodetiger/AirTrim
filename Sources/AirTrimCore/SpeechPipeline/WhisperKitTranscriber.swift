@@ -17,17 +17,22 @@ public protocol Transcriber: Sendable {
 /// 4. 简繁归一化 + 断句 → 不可变 Transcript
 public struct WhisperKitTranscriber: Transcriber {
     public let modelFolder: URL
+    /// 本地 tokenizer 目录（含 tokenizer.json）；nil 时 WhisperKit 会回退到
+    /// 其 Hub 缓存（可能触网），ModelInstaller 装机后应始终提供
+    public let tokenizerFolder: URL?
     /// PCM 采样率（AudioLoader/PCMExtractor 约定 16kHz）
     public static let sampleRate: Int32 = 16000
 
-    public init(modelFolder: URL) {
+    public init(modelFolder: URL, tokenizerFolder: URL? = nil) {
         self.modelFolder = modelFolder
+        self.tokenizerFolder = tokenizerFolder
     }
 
     public func transcribe(audioPath: String, pcm: [Float], language: String = "zh") async throws -> Transcript {
         let config = WhisperKitConfig(
             model: modelFolder.lastPathComponent,
             modelFolder: modelFolder.path,
+            tokenizerFolder: tokenizerFolder,
             download: false
         )
         let pipe = try await WhisperKit(config)

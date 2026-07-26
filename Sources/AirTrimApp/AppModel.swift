@@ -1,5 +1,6 @@
 import AVFoundation
 import AirTrimCore
+import AirTrimInstaller
 import AppKit
 import Foundation
 import SwiftUI
@@ -62,6 +63,32 @@ final class AppModel: ObservableObject {
         stage = .idle
     }
 
+    // MARK: - 应用内模型下载（设计 D1；网络只在 App 层）
+
+    @Published private(set) var installProgress: InstallProgress?
+    @Published private(set) var installError: String?
+
+    func downloadModel() {
+        guard installProgress == nil else { return }
+        installError = nil
+        let installer = ModelInstaller(manifest: .largeV3, destination: Self.appSupportModels)
+        installProgress = InstallProgress(bytesDone: 0, bytesTotal: ModelManifest.largeV3.totalBytes,
+                                          filesDone: 0, filesTotal: 27, currentFile: "准备中…")
+        Task {
+            do {
+                let modelDir = try await installer.install { progress in
+                    Task { @MainActor [weak self] in self?.installProgress = progress }
+                }
+                self.installProgress = nil
+                self.modelFolder = modelDir
+                self.stage = .idle
+            } catch {
+                self.installProgress = nil
+                self.installError = error.localizedDescription
+            }
+        }
+    }
+
     func chooseVideo() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.movie, .mpeg4Movie, .quickTimeMovie, .audio]
@@ -77,7 +104,11 @@ final class AppModel: ObservableObject {
         Task {
             do {
                 let pcm = try await PCMExtractor.monoPCM(url: url)
-                let transcriber = WhisperKitTranscriber(modelFolder: modelFolder)
+                let tokenizerDir = modelFolder.appendingPathComponent("tokenizer")
+                let transcriber = WhisperKitTranscriber(
+                    modelFolder: modelFolder,
+                    tokenizerFolder: FileManager.default.fileExists(atPath: tokenizerDir.path)
+                        ? tokenizerDir : nil)
                 let result = try await transcriber.transcribe(
                     audioPath: url.path, pcm: pcm, language: "zh")
                 self.transcript = result

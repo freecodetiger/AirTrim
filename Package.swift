@@ -25,9 +25,14 @@ let package = Package(
             ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // App 层模型下载器（设计 D1：Core 永不联网，下载在组合根一侧）
+        .target(
+            name: "AirTrimInstaller",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .executableTarget(
             name: "AirTrimApp",
-            dependencies: ["AirTrimCore"],
+            dependencies: ["AirTrimCore", "AirTrimInstaller"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // ―― M0 spike：可测纯逻辑（Kit）与 CLI 分离；不进入 AirTrimCore/App 依赖图 ――
@@ -53,6 +58,11 @@ let package = Package(
         .testTarget(
             name: "AirTrimSpikeTests",
             dependencies: ["AirTrimSpikeKit"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "AirTrimInstallerTests",
+            dependencies: ["AirTrimInstaller"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
     ]

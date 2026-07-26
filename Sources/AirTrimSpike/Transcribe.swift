@@ -35,6 +35,11 @@ struct Transcribe: AsyncParsableCommand {
         let config = WhisperKitConfig(model: model, modelFolder: modelFolder, prewarm: true)
         let pipe = try await WhisperKit(config)
 
+        if language.hasPrefix("zh"), let tok = pipe.tokenizer {
+            pipe.tokenizer = ZhWordSplitTokenizer(wrapping: tok)
+            FileHandle.standardError.write(Data("已启用中文逐字切词（绕过上游语言检测 bug）\n".utf8))
+        }
+
         let duration = try await AVURLAsset(url: audioURL).load(.duration).seconds
         let options = DecodingOptions(
             task: .transcribe,

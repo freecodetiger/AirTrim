@@ -25,22 +25,47 @@ struct Burn: AsyncParsableCommand {
             help: "烧录完成后按秒导出帧 PNG（可多个），写到输出同目录")
     var dumpFrames: [Double] = []
 
+    @Flag(help: "一键紧凑耳测：接受缓存里全部 pause 建议（或 --tighten-intensity 现算）后按成片烧录")
+    var tighten = false
+
+    @Option(name: .customLong("tighten-intensity"),
+            help: "忽略缓存建议，按此紧凑度（0-1）现跑 PauseAnalyzer 并全收")
+    var tightenIntensity: Double?
+
     /// 项目缓存里只取 Core 负载；App 的信封字段（指纹等）不关心
     struct ProjectPayload: Decodable {
         let transcript: Transcript
         let patch: TranscriptPatch
+        let edits: EditList?
+        let suggestions: [EditSuggestion]?
     }
 
     func run() async throws {
         let payload = try JSONDecoder().decode(
             ProjectPayload.self, from: Data(contentsOf: URL(fileURLWithPath: project)))
         let cues = Subtitles.cues(transcript: payload.transcript, patch: payload.patch)
-        print("字幕 \(cues.count) 条，开始烧录…")
+
+        var edits = payload.edits ?? EditList()
+        if let intensity = tightenIntensity {
+            let fresh = PauseAnalyzer.suggest(
+                transcript: payload.transcript,
+                effectiveSentences: payload.patch.effectiveSentences(in: payload.transcript),
+                silences: payload.transcript.silences,
+                params: TightenParams(intensity: intensity))
+            for s in fresh { edits.add(s.cut) }
+            print("紧凑度 \(intensity)：\(fresh.count) 处停顿全收")
+        } else if tighten {
+            let pauses = (payload.suggestions ?? []).filter { $0.kind == .pause && $0.state != .rejected }
+            for s in pauses { edits.add(s.cut) }
+            print("缓存建议全收：\(pauses.count) 处")
+        }
+        let removed = edits.removedDuration.seconds
+        print("字幕 \(cues.count) 条，剪 \(edits.cuts.count) 段共 \(String(format: "%.1f", removed))s，开始烧录…")
 
         let outputURL = URL(fileURLWithPath: output)
         let t0 = Date()
         try await SubtitleBurner.burn(
-            source: URL(fileURLWithPath: video), cues: cues, to: outputURL
+            source: URL(fileURLWithPath: video), cues: cues, to: outputURL, edits: edits
         ) { fraction in
             FileHandle.standardError.write(Data("\r\(Int(fraction * 100))%".utf8))
         }

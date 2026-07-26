@@ -36,6 +36,14 @@ swift run -c release airtrim-spike burn \
   --output /tmp/burn-check.mp4 --dump-frame 3 45 130
 ```
 
+### A-M2（一键紧凑，2026-07-27 起）
+
+| # | 项 | 命令/判据 |
+|---|---|---|
+| A9 | 紧凑样片回归 | `airtrim-spike burn --tighten`（或 `--tighten-intensity 0.5`）出片成功、时长 = 源 − 已剪 |
+| A10 | 视觉冒烟 | `AIRTRIM_SNAPSHOT=<png> open build/AirTrim.app`：卡片/轨道/建议块/波形齐全 |
+| A11 | EditModel/Analyzer 单测 | `swift test`（含 EditList 换算往返、建议生命周期、PauseAnalyzer 参数缩放） |
+
 ## B. 人工验收（owner）
 
 - [ ] B1 冷启动恢复上次会话（秒开，不重转写）
@@ -46,6 +54,9 @@ swift run -c release airtrim-spike burn \
 - [ ] B6 模型管理：设置页显示占用；「校验并修复」可跑；删除后回到 onboarding
 - [ ] B7 错误路径：导入纯音频（可转写）、无音轨视频（明确报错）、下载中断点重试
 - [ ] B8 图标在 Dock/访达/关于窗口显示正常
+- [ ] B9 一键紧凑耳测：成片无爆音、无吞字、停顿保留自然（听感不变量，cut-quality skill）
+- [ ] B10 建议审阅：跳听/接受/拒绝/⌘Z 整体回退；紧凑度滑杆重跑不打扰已拒绝项
+- [ ] B11 成片预览开关：播放头映射正确，卡片/轨道高亮跟随成片播放
 
 ## C. 已知素材缺口（不阻塞发版，但记录在案）
 

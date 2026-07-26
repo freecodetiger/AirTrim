@@ -267,11 +267,17 @@ struct EditorView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        HSplitView {
-            SentenceListView()
-                .frame(minWidth: 380)
-            PreviewPane()
-                .frame(minWidth: 320)
+        VStack(spacing: 0) {
+            HSplitView {
+                SubtitleCardListView()
+                    .frame(minWidth: 380)
+                PreviewPane()
+                    .frame(minWidth: 320)
+            }
+            Divider()
+            TightenBar()
+            TrackAreaView()
+                .frame(height: 146)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -343,28 +349,6 @@ struct EditorView: View {
     }
 }
 
-struct SentenceListView: View {
-    @EnvironmentObject var model: AppModel
-
-    var body: some View {
-        ScrollViewReader { proxy in
-            List(model.sentences, id: \.words.lowerBound) { sentence in
-                SentenceRow(sentence: sentence)
-                    .id(sentence.words.lowerBound)
-                    .listRowBackground(
-                        model.currentSentenceStart == sentence.words.lowerBound
-                            ? Color.accentColor.opacity(0.10) : Color.clear
-                    )
-            }
-            .listStyle(.inset)
-            .onChange(of: model.currentSentenceStart) { _, start in
-                guard model.isPlaying, let start else { return }
-                withAnimation { proxy.scrollTo(start, anchor: .center) }
-            }
-        }
-    }
-}
-
 /// 直接承载 AVKit 的 AVPlayerView。
 /// 不用 SwiftUI 的 VideoPlayer：那是 _AVKit_SwiftUI 的包装类，release 死代码
 /// 剥离会裁掉未被直接引用的 AVKit 链接，运行时按名字解析父类 AVPlayerView
@@ -406,92 +390,5 @@ struct PreviewPane: View {
                 .foregroundStyle(.white)
         }
         .background(.black)
-    }
-}
-
-struct SentenceRow: View {
-    @EnvironmentObject var model: AppModel
-    let sentence: TranscriptSentence
-    @State private var draft = ""
-    @State private var showSplitPicker = false
-    @FocusState private var focused: Bool
-
-    var timeLabel: String {
-        guard let transcript = model.transcript,
-              let range = transcript.sentenceRange(sentence) else { return "--:--" }
-        let s = Int(range.start.seconds)
-        return String(format: "%02d:%02d", s / 60, s % 60)
-    }
-
-    var edited: Bool {
-        model.session.current.patch.textOverrides[sentence.words.lowerBound] != nil
-    }
-
-    var body: some View {
-        let currentText = model.sentenceText(sentence)
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Button {
-                model.playSentence(sentence)
-            } label: {
-                Image(systemName: "play.circle")
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(.secondary)
-            .help("试听整句")
-
-            Text(timeLabel)
-                .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(edited ? Color.accentColor : .secondary)
-                .frame(width: 44, alignment: .trailing)
-                .onTapGesture { model.seek(to: sentence) }
-                .help("跳转到句首")
-
-            TextField("", text: $draft, axis: .vertical)
-                .textFieldStyle(.plain)
-                .focused($focused)
-                .onAppear { draft = currentText }
-                .onChange(of: currentText) { _, new in
-                    if !focused { draft = new }
-                }
-                .onChange(of: focused) { _, isFocused in
-                    if !isFocused { model.updateSentence(sentence, text: draft) }
-                }
-                .onSubmit { model.updateSentence(sentence, text: draft) }
-        }
-        .padding(.vertical, 2)
-        .contextMenu {
-            Button("拆分此句…") { showSplitPicker = true }
-                .disabled(sentence.words.count < 2)
-            Button("与上一句合并") { model.mergeWithPrevious(sentence) }
-                .disabled(sentence.words.lowerBound == 0)
-        }
-        .popover(isPresented: $showSplitPicker) {
-            SplitPicker(sentence: sentence)
-        }
-    }
-}
-
-/// 拆句选择器：点某个词 = 从该词前断开
-struct SplitPicker: View {
-    @EnvironmentObject var model: AppModel
-    let sentence: TranscriptSentence
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("点击要作为新句开头的词").font(.caption).foregroundStyle(.secondary)
-            let words = model.transcript.map { Array($0.words[sentence.words]) } ?? []
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 4)], spacing: 4) {
-                ForEach(Array(words.enumerated().dropFirst()), id: \.offset) { offset, w in
-                    Button(w.text) {
-                        model.splitSentence(before: sentence.words.lowerBound + offset)
-                        dismiss()
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-        }
-        .padding(12)
-        .frame(width: 360)
     }
 }

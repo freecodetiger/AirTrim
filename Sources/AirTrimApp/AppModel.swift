@@ -34,9 +34,16 @@ final class AppModel: ObservableObject {
     @Published private(set) var currentSentenceStart: Int?
     @Published private(set) var currentCueText: String?
     @Published private(set) var isPlaying = false
+    /// 时间轴/卡片联动的选中句（UI 状态，非剪辑状态）
+    @Published var selectedSentenceStart: Int?
+    /// 播放头在源时间轴上的显示值（秒，仅供 UI 绘制）
+    @Published private(set) var currentSourceSeconds: Double = 0
     private var timeObserver: Any?
     private var stopAt: CMTime?
+    /// 播放头的权威位置（源时间轴 CMTime；模式切换/重建 item 后据此复位）
+    private var lastSourceTime: CMTime = .zero
     private var cachedCues: [SubtitleCue] = []
+    var cues: [SubtitleCue] { cachedCues }
 
     private(set) var modelFolder: URL?
 
@@ -54,6 +61,19 @@ final class AppModel: ObservableObject {
         } else if let last = ProjectStore.lastOpenedURL() {
             // 恢复上次会话（缓存命中秒开；不满足条件则停在导入页）
             start(url: last)
+        }
+        // 视觉冒烟钩子：AIRTRIM_SNAPSHOT=<png路径> 启动 8s 后窗口自截图
+        // （应用截自己的窗口无需屏幕录制权限；release 回归清单用）
+        if let snapshotPath = ProcessInfo.processInfo.environment["AIRTRIM_SNAPSHOT"] {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 8_000_000_000)
+                if let view = NSApp.windows.first(where: { $0.isVisible })?.contentView,
+                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                    view.cacheDisplay(in: view.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?
+                        .write(to: URL(fileURLWithPath: snapshotPath))
+                }
+            }
         }
     }
 
@@ -126,6 +146,7 @@ final class AppModel: ObservableObject {
             setupPlayer(url: url)
             refreshDerived()
             stage = .editor
+            rerunPauseAnalysis()
             backfillDerivedAudioIfNeeded(url: url)
             return
         }
@@ -154,6 +175,7 @@ final class AppModel: ObservableObject {
                 self.setupPlayer(url: url)
                 self.refreshDerived()
                 self.stage = .editor
+                self.rerunPauseAnalysis()
                 ProjectStore.save(source: url, transcript: result, snapshot: self.session.current,
                                   waveformPeaks: self.waveformPeaks)
             } catch let error as MediaEngineError {
@@ -184,6 +206,7 @@ final class AppModel: ObservableObject {
                                   snapshot: self.session.current,
                                   waveformPeaks: self.waveformPeaks)
             }
+            self.rerunPauseAnalysis()   // silences 到位，建议此刻才可能出现
         }
     }
 
@@ -276,7 +299,122 @@ final class AppModel: ObservableObject {
         if let sourceURL {
             ProjectStore.save(source: sourceURL, transcript: transcript, snapshot: session.current)
         }
+        if previewTightened { schedulePreviewRebuild() }
         objectWillChange.send()
+    }
+
+    // MARK: - 一键紧凑（M2）：分析 → 审阅 → 成片预览
+
+    @Published var tightenIntensity: Double = 0.5
+    @Published var previewTightened = false {
+        didSet { if previewTightened != oldValue { refreshPlayerItem() } }
+    }
+    @Published var selectedSuggestionID: UUID?
+    private var previewRebuild: Task<Void, Never>?
+    private var auditioning = false
+
+    var proposedPauses: [EditSuggestion] {
+        session.current.suggestions.filter { $0.state == .proposed && $0.kind == .pause }
+    }
+
+    /// 建议可省的总时长（proposed，秒，显示值）
+    var proposedSavings: Double {
+        proposedPauses.reduce(CMTime.zero) { CMTimeAdd($0, $1.cut.duration) }.seconds
+    }
+
+    var removedSeconds: Double { session.current.edits.removedDuration.seconds }
+
+    /// 重跑停顿分析（紧凑度滑杆松手 / 进入编辑器 / silences 补算完成时）。
+    /// proposed 刷新不入 undo 栈；rejected/accepted 由 EditSession 保护不被打扰。
+    func rerunPauseAnalysis() {
+        guard let transcript, !transcript.silences.isEmpty else { return }
+        let fresh = PauseAnalyzer.suggest(
+            transcript: transcript,
+            effectiveSentences: session.current.patch.effectiveSentences(in: transcript),
+            silences: transcript.silences,
+            params: TightenParams(intensity: tightenIntensity))
+        session.refreshProposed(with: fresh, of: .pause)
+        refreshDerived()
+    }
+
+    func accept(suggestionID id: UUID) {
+        session.apply { $0.accept(suggestionID: id) }
+        selectedSuggestionID = nil
+        refreshDerived()
+    }
+
+    func reject(suggestionID id: UUID) {
+        session.apply { $0.reject(suggestionID: id) }
+        selectedSuggestionID = nil
+        refreshDerived()
+    }
+
+    /// 一键紧凑：全收 proposed（走 accept 路径，一次 undo 可整体回退）
+    func acceptAllPauses() {
+        guard !proposedPauses.isEmpty else { return }
+        session.apply { $0.acceptAllProposed(of: .pause) }
+        refreshDerived()
+    }
+
+    /// 跳听：只应用这一个切口的拼接结果，切点前后各 1.5s（cut-quality 审阅原则）
+    func audition(suggestionID id: UUID) {
+        guard let sourceURL, let player,
+              let suggestion = session.current.suggestions.first(where: { $0.id == id }) else { return }
+        var solo = EditList()
+        solo.add(suggestion.cut)
+        Task {
+            guard let item = try? await PreviewComposer.playerItem(url: sourceURL, edits: solo) else { return }
+            let junction = solo.outputTime(forSource: suggestion.cut.start)
+            let margin = CMTime(value: 1500, timescale: 1000)
+            auditioning = true
+            player.replaceCurrentItem(with: item)
+            stopAt = CMTimeAdd(junction, margin)
+            await player.seek(to: CMTimeMaximum(.zero, CMTimeSubtract(junction, margin)),
+                              toleranceBefore: .zero, toleranceAfter: .zero)
+            player.play()
+        }
+    }
+
+    /// 播放器 item 与当前模式对齐（原片 / 成片），并把播放头复位到对应位置
+    private func refreshPlayerItem() {
+        guard let sourceURL, let player else { return }
+        let edits = session.current.edits
+        let resumeSource = lastSourceTime
+        auditioning = false
+        Task {
+            if previewTightened {
+                guard let item = try? await PreviewComposer.playerItem(url: sourceURL, edits: edits) else { return }
+                player.replaceCurrentItem(with: item)
+                await player.seek(to: edits.outputTime(forSource: resumeSource),
+                                  toleranceBefore: .zero, toleranceAfter: .zero)
+            } else {
+                player.replaceCurrentItem(with: AVPlayerItem(url: sourceURL))
+                await player.seek(to: resumeSource, toleranceBefore: .zero, toleranceAfter: .zero)
+            }
+        }
+    }
+
+    /// 剪辑变化后重建成片预览（去抖 300ms，设计 m2 §7 风险对策）
+    private func schedulePreviewRebuild() {
+        previewRebuild?.cancel()
+        previewRebuild = Task {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            guard !Task.isCancelled else { return }
+            self.refreshPlayerItem()
+        }
+    }
+
+    /// 时间轴 scrub（输入是 UI 像素换算出的源轴秒）
+    func scrub(toSourceSeconds seconds: Double) {
+        stopAt = nil
+        seekPlayer(toSource: CMTime(seconds: max(0, seconds), preferredTimescale: 600))
+    }
+
+    private func seekPlayer(toSource t: CMTime) {
+        lastSourceTime = t
+        currentSourceSeconds = t.seconds
+        let target = previewTightened ? session.current.edits.outputTime(forSource: t) : t
+        player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
     }
 
     func retranscribe() {
@@ -342,7 +480,7 @@ final class AppModel: ObservableObject {
         let player = AVPlayer(url: url)
         self.player = player
         timeObserver = player.addPeriodicTimeObserver(
-            forInterval: CMTime(value: 1, timescale: 10), queue: .main
+            forInterval: CMTime(value: 1, timescale: 30), queue: .main
         ) { [weak self] time in
             MainActor.assumeIsolated { self?.playbackTick(time) }
         }
@@ -353,29 +491,40 @@ final class AppModel: ObservableObject {
         if let stopAt, CMTimeCompare(time, stopAt) >= 0 {
             player?.pause()
             self.stopAt = nil
+            if auditioning { refreshPlayerItem(); return }   // 跳听结束回到正常预览
         }
-        guard let transcript else { return }
+        guard let transcript, !auditioning else { return }
+        // item 时间轴 → 源时间轴（成片模式经 EditList 映射；唯一真相仍是 EditList）
+        let sourceT = previewTightened
+            ? session.current.edits.sourceTime(forOutput: time,
+                                               sourceDuration: transcript.sourceDuration)
+            : time
+        lastSourceTime = sourceT
+        currentSourceSeconds = sourceT.seconds
         let sentence = session.current.patch.effectiveSentences(in: transcript).last { s in
             guard let range = transcript.sentenceRange(s) else { return false }
-            return CMTimeCompare(range.start, time) <= 0
+            return CMTimeCompare(range.start, sourceT) <= 0
         }
         currentSentenceStart = sentence?.words.lowerBound
         currentCueText = cachedCues.last {
-            CMTimeCompare($0.start, time) <= 0 && CMTimeCompare(time, $0.end) <= 0
+            CMTimeCompare($0.start, sourceT) <= 0 && CMTimeCompare(sourceT, $0.end) <= 0
         }?.text
     }
 
     func seek(to s: TranscriptSentence) {
         guard let transcript, let range = transcript.sentenceRange(s) else { return }
         stopAt = nil
-        player?.seek(to: range.start, toleranceBefore: .zero, toleranceAfter: .zero)
+        seekPlayer(toSource: range.start)
     }
 
-    /// 双击试听整句：句首播到句尾自动停
+    /// 试听整句：句首播到句尾自动停（stopAt 存 item 轴，成片模式先映射）
     func playSentence(_ s: TranscriptSentence) {
         guard let transcript, let range = transcript.sentenceRange(s) else { return }
-        stopAt = range.end
-        player?.seek(to: range.start, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+        let edits = session.current.edits
+        stopAt = previewTightened ? edits.outputTime(forSource: range.end) : range.end
+        lastSourceTime = range.start
+        let target = previewTightened ? edits.outputTime(forSource: range.start) : range.start
+        player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
             Task { @MainActor in self?.player?.play() }
         }
     }
@@ -401,9 +550,11 @@ final class AppModel: ObservableObject {
         guard panel.runModal() == .OK, let outputURL = panel.url else { return }
         burnProgress = 0
         let cues = cachedCues
+        let edits = session.current.edits
         burnTask = Task {
             do {
-                try await SubtitleBurner.burn(source: sourceURL, cues: cues, to: outputURL) { fraction in
+                try await SubtitleBurner.burn(source: sourceURL, cues: cues, to: outputURL,
+                                              edits: edits) { fraction in
                     Task { @MainActor [weak self] in self?.burnProgress = fraction }
                 }
                 NSWorkspace.shared.activateFileViewerSelecting([outputURL])
@@ -423,7 +574,8 @@ final class AppModel: ObservableObject {
 
     func exportSRT() {
         guard transcript != nil else { return }
-        let srt = Subtitles.srt(cachedCues)
+        // SRT 时间要的是成片轴（edit-model skill）；无剪辑时 retime 恒等
+        let srt = Subtitles.srt(Subtitles.retime(cachedCues, through: session.current.edits))
         let panel = NSSavePanel()
         panel.allowedContentTypes = [UTType(filenameExtension: "srt") ?? .plainText]
         panel.nameFieldStringValue = (sourceURL?.deletingPathExtension().lastPathComponent ?? "subtitles") + ".srt"

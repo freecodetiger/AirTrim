@@ -69,6 +69,13 @@ public struct EditSession: Sendable, Equatable {
         mutate(&current)
     }
 
+    /// 不入 undo 栈的 proposed 刷新（紧凑度滑杆重跑分析属参数联动，非用户编辑；
+    /// accept/reject 仍必须走 apply）
+    public mutating func refreshProposed(with fresh: [EditSuggestion],
+                                         of kind: EditSuggestion.Kind) {
+        current.replaceProposed(with: fresh, of: kind)
+    }
+
     @discardableResult
     public mutating func undo() -> Bool {
         guard let last = history.popLast() else { return false }

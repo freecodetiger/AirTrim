@@ -1,4 +1,5 @@
 import AVFoundation
+import AirTrimCore
 import AirTrimSpikeKit
 import ArgumentParser
 import Foundation

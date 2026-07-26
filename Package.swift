@@ -18,6 +18,11 @@ let package = Package(
     targets: [
         .target(
             name: "AirTrimCore",
+            dependencies: [
+                // ADR-0006：v1 ASR 引擎。SpeechPipeline 只加载本地模型目录，
+                // 永不触发其下载路径（设计 D1，网络仍仅限 LLMProvider）
+                .product(name: "WhisperKit", package: "argmax-oss-swift"),
+            ],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .executableTarget(
@@ -34,6 +39,7 @@ let package = Package(
             name: "AirTrimSpike",
             dependencies: [
                 "AirTrimSpikeKit",
+                "AirTrimCore",
                 .product(name: "WhisperKit", package: "argmax-oss-swift"),
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
             ],

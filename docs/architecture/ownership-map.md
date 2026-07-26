@@ -17,7 +17,8 @@
 | 语气词建议 | `FillerAnalyzer` | 同上 | 同上 |
 | 废话建议（结合全文） | `VerbosityAnalyzer` | 同上 | 同上 |
 | 网络调用 · BYOK Key 管理（Keychain） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` | URLSession 仅此目录（脚本） |
-| **剪辑状态**：`EditList` · suggestion 生命周期 · undo | `EditModel` | `Sources/AirTrimCore/EditModel/` | 代码评审 |
+| **剪辑状态**：`EditList` · suggestion 生命周期 · `TranscriptPatch`（改字/断句修订）· undo | `EditModel` | `Sources/AirTrimCore/EditModel/` | 代码评审 |
+| 字幕条生成（Transcript+Patch → cues → SRT 文本） | `Subtitles` | `Sources/AirTrimCore/Subtitles/` | 无 AVFoundation（脚本） |
 | UI 全部 | `AirTrimApp` | `Sources/AirTrimApp/` | Core 无 SwiftUI/AppKit（脚本） |
 
 ## 分层与依赖方向

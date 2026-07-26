@@ -48,7 +48,8 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 | 语气词分析 | `FillerAnalyzer` | `Sources/AirTrimCore/Analysis/` |
 | 结合全文的废话分析 | `VerbosityAnalyzer` | `Sources/AirTrimCore/Analysis/` |
 | 云端 LLM 调用（BYOK · 唯一联网点） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` |
-| 剪辑状态（EditList / suggestion 生命周期 / undo） | `EditModel` | `Sources/AirTrimCore/EditModel/` |
+| 剪辑状态（EditList / suggestion 生命周期 / TranscriptPatch / undo） | `EditModel` | `Sources/AirTrimCore/EditModel/` |
+| 字幕条生成（cues / SRT 序列化，纯值类型） | `Subtitles` | `Sources/AirTrimCore/Subtitles/` |
 | UI（文字稿编辑器 · 时间线 · 审阅 · 设置） | `AirTrimApp` | `Sources/AirTrimApp/` |
 
 依赖方向：`App → Core`；Core 内 `Analysis`/`EditModel` 是纯值类型层，`MediaEngine`/`SpeechPipeline`/`LLMProvider` 是系统框架/网络适配层。**禁止回指。**

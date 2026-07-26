@@ -52,6 +52,25 @@
 > 修复方式：`ZhWordSplitTokenizer` 包装器注入 `WhisperKit.tokenizer`
 > （`--language zh` 时自动启用）；应同步给上游提 PR 修语言检测。
 
+### Bug 深挖验证（2026-07-26，判定：真 bug，未被上游报告）
+
+1. **实证**：`NLLanguageRecognizer` 对白名单 6 语言的输出——ja/th/lo/my 均返回
+   与白名单一致的码（✅ 命中），中文返回 `zh-Hans`/`zh-Hant`（❌ 双双漏判）；
+   `yue` 是死代码（NLLanguage 无粤语，归入 zh-Hant，同样漏）。
+2. **设计对照**：OpenAI 原版 `split_to_word_tokens` 用**解码器语言码**
+   （`self.language`，字面 `"zh"`，tokenizer.py:277-282）；WhisperKit 移植时
+   白名单照抄、语言来源改为对文本重跑 NL 检测——BCP-47 对 Whisper 码制，
+   码制错配即回归点。main 分支（2026-07）仍存在。
+3. **无副作用证明**：`findAlignment` 先做 DTW 得到**逐 token** 时间，再按
+   `splitToWordTokens` 分组合并——底层对齐一直是对的，是错误分组 + 1.4s
+   截断启发式把好数据毁掉；修复只改合并粒度，纯收益。
+4. **上游检索**：zh-Hans / splitToWordTokens / NLLanguageRecognizer /
+   chinese word timestamps 全部 0 命中——未被报告。
+5. **影响面**：所有对中文（简/繁）及粤语开 `wordTimestamps` 的 WhisperKit 用户。
+
+上游修复建议：最小改动 = 白名单匹配改前缀/Locale 映射（`zh-Hans`→`zh`）；
+设计正确版 = 仿 OpenAI 把解码语言传入 tokenizer（需动 `WhisperTokenizer` 协议）。
+
 ## 耳朵验收改走 VAD
 
 按产品架构（停顿检测本属 VAD 职责），spike 补了能量 VAD（`EnergyVAD`，

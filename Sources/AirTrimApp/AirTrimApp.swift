@@ -1,3 +1,4 @@
+import AVKit
 import AirTrimCore
 import SwiftUI
 import UniformTypeIdentifiers
@@ -10,7 +11,7 @@ struct AirTrimApp: App {
         WindowGroup("AirTrim") {
             RootView()
                 .environmentObject(model)
-                .frame(minWidth: 640, minHeight: 480)
+                .frame(minWidth: 860, minHeight: 540)
         }
         .commands {
             CommandGroup(after: .undoRedo) {
@@ -111,17 +112,17 @@ struct FailedView: View {
     }
 }
 
+// MARK: - 编辑器（左：句列表 · 右：预览）
+
 struct EditorView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        Group {
-            if let transcript = model.transcript {
-                List(transcript.sentences, id: \.id) { sentence in
-                    SentenceRow(sentence: sentence, transcript: transcript)
-                }
-                .listStyle(.inset)
-            }
+        HSplitView {
+            SentenceListView()
+                .frame(minWidth: 380)
+            PreviewPane()
+                .frame(minWidth: 320)
         }
         .toolbar {
             ToolbarItemGroup {
@@ -143,38 +144,135 @@ struct EditorView: View {
     }
 }
 
+struct SentenceListView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            List(model.sentences, id: \.words.lowerBound) { sentence in
+                SentenceRow(sentence: sentence)
+                    .id(sentence.words.lowerBound)
+                    .listRowBackground(
+                        model.currentSentenceStart == sentence.words.lowerBound
+                            ? Color.accentColor.opacity(0.10) : Color.clear
+                    )
+            }
+            .listStyle(.inset)
+            .onChange(of: model.currentSentenceStart) { _, start in
+                guard model.isPlaying, let start else { return }
+                withAnimation { proxy.scrollTo(start, anchor: .center) }
+            }
+        }
+    }
+}
+
+struct PreviewPane: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 0) {
+            if let player = model.player {
+                VideoPlayer(player: player)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                Color.black
+            }
+            // 软字幕预览：导出/烧录前所见即所得
+            Text(model.currentCueText ?? " ")
+                .font(.system(size: 15, weight: .medium))
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: .infinity, minHeight: 48)
+                .background(.black.opacity(0.85))
+                .foregroundStyle(.white)
+        }
+        .background(.black)
+    }
+}
+
 struct SentenceRow: View {
     @EnvironmentObject var model: AppModel
     let sentence: TranscriptSentence
-    let transcript: Transcript
     @State private var draft = ""
+    @State private var showSplitPicker = false
     @FocusState private var focused: Bool
 
     var timeLabel: String {
-        guard let range = transcript.sentenceRange(sentence) else { return "--:--" }
+        guard let transcript = model.transcript,
+              let range = transcript.sentenceRange(sentence) else { return "--:--" }
         let s = Int(range.start.seconds)
         return String(format: "%02d:%02d", s / 60, s % 60)
     }
 
     var edited: Bool {
-        model.patches.current.sentenceTextOverrides[sentence.id] != nil
+        model.patches.current.textOverrides[sentence.words.lowerBound] != nil
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
+        let currentText = model.sentenceText(sentence)
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            Button {
+                model.playSentence(sentence)
+            } label: {
+                Image(systemName: "play.circle")
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help("试听整句")
+
             Text(timeLabel)
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(edited ? Color.accentColor : .secondary)
                 .frame(width: 44, alignment: .trailing)
+                .onTapGesture { model.seek(to: sentence) }
+                .help("跳转到句首")
+
             TextField("", text: $draft, axis: .vertical)
                 .textFieldStyle(.plain)
                 .focused($focused)
-                .onAppear { draft = model.sentenceText(sentence) }
+                .onAppear { draft = currentText }
+                .onChange(of: currentText) { _, new in
+                    if !focused { draft = new }
+                }
                 .onChange(of: focused) { _, isFocused in
                     if !isFocused { model.updateSentence(sentence, text: draft) }
                 }
                 .onSubmit { model.updateSentence(sentence, text: draft) }
         }
         .padding(.vertical, 2)
+        .contextMenu {
+            Button("拆分此句…") { showSplitPicker = true }
+                .disabled(sentence.words.count < 2)
+            Button("与上一句合并") { model.mergeWithPrevious(sentence) }
+                .disabled(sentence.words.lowerBound == 0)
+        }
+        .popover(isPresented: $showSplitPicker) {
+            SplitPicker(sentence: sentence)
+        }
+    }
+}
+
+/// 拆句选择器：点某个词 = 从该词前断开
+struct SplitPicker: View {
+    @EnvironmentObject var model: AppModel
+    let sentence: TranscriptSentence
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("点击要作为新句开头的词").font(.caption).foregroundStyle(.secondary)
+            let words = model.transcript.map { Array($0.words[sentence.words]) } ?? []
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 56), spacing: 4)], spacing: 4) {
+                ForEach(Array(words.enumerated().dropFirst()), id: \.offset) { offset, w in
+                    Button(w.text) {
+                        model.splitSentence(before: sentence.words.lowerBound + offset)
+                        dismiss()
+                    }
+                    .buttonStyle(.bordered)
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 360)
     }
 }

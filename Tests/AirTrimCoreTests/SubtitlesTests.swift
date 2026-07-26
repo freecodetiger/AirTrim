@@ -78,7 +78,7 @@ struct SubtitleCueTests {
 
     @Test func patchedSentenceUsesOverrideText() {
         let t = transcript([word("错字。", 0, 1.5)])
-        let patch = TranscriptPatch(sentenceTextOverrides: [0: "对字。"])
+        let patch = TranscriptPatch(textOverrides: [0: "对字。"])
         let cues = Subtitles.cues(transcript: t, patch: patch)
         #expect(cues.count == 1)
         #expect(cues[0].text == "对字。")
@@ -95,18 +95,56 @@ struct SubtitleCueTests {
 
 @Suite("TranscriptPatch")
 struct PatchTests {
+    // 两句：`0..<2` 与 `2..<4`
+    var t: Transcript {
+        transcript([
+            word("今天", 0, 0.5), word("很好。", 0.5, 1.0),
+            word("明天", 1.2, 1.6), word("再说？", 1.6, 2.0),
+        ])
+    }
+
     @Test func undoRestoresPreviousState() {
         var session = PatchSession()
-        session.apply { $0.sentenceTextOverrides[0] = "改一" }
-        session.apply { $0.sentenceTextOverrides[0] = "改二" }
-        #expect(session.current.sentenceTextOverrides[0] == "改二")
+        session.apply { $0.textOverrides[0] = "改一" }
+        session.apply { $0.textOverrides[0] = "改二" }
+        #expect(session.current.textOverrides[0] == "改二")
         let undo1 = session.undo()
         #expect(undo1)
-        #expect(session.current.sentenceTextOverrides[0] == "改一")
+        #expect(session.current.textOverrides[0] == "改一")
         let undo2 = session.undo()
         #expect(undo2)
-        #expect(session.current.sentenceTextOverrides.isEmpty)
+        #expect(session.current.textOverrides.isEmpty)
         let undo3 = session.undo()
         #expect(!undo3)
+    }
+
+    @Test func splitCreatesNewSentenceAndDropsOwnerOverride() {
+        var patch = TranscriptPatch(textOverrides: [0: "整句覆盖"])
+        patch.split(before: 1, in: t)
+        let sentences = patch.effectiveSentences(in: t)
+        #expect(sentences.map(\.words) == [0..<1, 1..<2, 2..<4])
+        #expect(patch.textOverrides[0] == nil, "被拆句子的覆盖作废")
+    }
+
+    @Test func mergeJoinsWithPreviousAndDropsBothOverrides() {
+        var patch = TranscriptPatch(textOverrides: [0: "甲", 2: "乙"])
+        patch.mergeWithPrevious(sentenceStartingAt: 2, in: t)
+        let sentences = patch.effectiveSentences(in: t)
+        #expect(sentences.map(\.words) == [0..<4])
+        #expect(patch.textOverrides.isEmpty)
+    }
+
+    @Test func unaffectedOverrideSurvivesStructureEdit() {
+        var patch = TranscriptPatch(textOverrides: [2: "后句覆盖"])
+        patch.split(before: 1, in: t)
+        #expect(patch.textOverrides[2] == "后句覆盖", "未波及句的键稳定")
+    }
+
+    @Test func invalidOpsAreNoOps() {
+        var patch = TranscriptPatch()
+        patch.split(before: 0, in: t)
+        patch.split(before: 2, in: t)          // 已是句起点
+        patch.mergeWithPrevious(sentenceStartingAt: 0, in: t)
+        #expect(patch.sentenceStarts == nil || patch.effectiveSentences(in: t).count == 2)
     }
 }

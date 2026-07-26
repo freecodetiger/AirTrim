@@ -74,6 +74,21 @@ struct TranscriptPatch: Sendable {          // EditModel 唯一持有
 - 改字**永不改时间戳**（时间权威仍是 SpeechPipeline 的 CMTime）；
 - 字幕、导出全部从 `(Transcript, TranscriptPatch)` 派生，无第二份状态。
 
+### D3a · 结构编辑与预览（2026-07-26 UI 反馈后补充）
+
+- 句身份 = **起点词下标**（拆/合句时未波及句的键天然稳定）；结构 =
+  `sentenceStarts` 断点表（nil = 原始断句）。
+- 拆/合句时**被波及句子的文本覆盖作废**（回原始转写，undo 可回退）——
+  结构整理通常先于文本润色，冲突场景按此策略化解。
+- 交互：右键句子 → "拆分此句…"（弹词块选择器，点词即从词前断开）/
+  "与上一句合并"。
+- 预览面板（编辑闭环必需）：左句列表右 AVPlayer；点时间码跳句首、
+  行首按钮试听整句（句尾自动停）、播放时当前句高亮跟随 + 自动滚动；
+  播放器下方实时显示当前字幕条 = 烧录前软预览。播放头是派生显示值，
+  不构成第二份时间状态。
+- ModelInstaller 提前为下一工作项（onboarding 阻断）；分档默认值须先过
+  评测（owner 决定测试时机）。
+
 ### D4 · 烧录走 spike 验证过的路径
 
 `AVMutableComposition`（M1 无剪切，整段直通）+ `AVVideoCompositionCoreAnimationTool`

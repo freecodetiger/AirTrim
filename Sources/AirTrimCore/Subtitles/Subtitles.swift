@@ -32,9 +32,9 @@ public enum Subtitles {
     public static func cues(transcript: Transcript, patch: TranscriptPatch = TranscriptPatch(),
                             rules: Rules = Rules()) -> [SubtitleCue] {
         var cues: [SubtitleCue] = []
-        for sentence in transcript.sentences {
+        for sentence in patch.effectiveSentences(in: transcript) {
             guard let range = transcript.sentenceRange(sentence) else { continue }
-            if let override = patch.sentenceTextOverrides[sentence.id] {
+            if let override = patch.textOverrides[sentence.words.lowerBound] {
                 let text = override.trimmingCharacters(in: .whitespacesAndNewlines)
                 if !text.isEmpty {
                     cues.append(SubtitleCue(start: range.start, end: range.end, text: text))

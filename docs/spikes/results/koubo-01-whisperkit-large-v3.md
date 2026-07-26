@@ -76,7 +76,13 @@
 
 按产品架构（停顿检测本属 VAD 职责），spike 补了能量 VAD（`EnergyVAD`，
 帧 RMS + 噪声底自适应 + 动态范围守卫），`earcheck --vad` 不依赖 ASR 时间戳出紧凑成片。
-结果见 `koubo-01-tight.mov` 试听记录（待补听感结论）。
+
+**试听结论（2026-07-26，用户本人验收）：通过** ✅ —— `koubo-01-tight.mov`
+（209.9s → 145.6s，剪除 59 处 ≥500ms 停顿，切口保留 150ms 最小停顿 + 50ms
+padding + 30ms 音量 ramp）听感自然、无吞字、无跳变。同时验证了
+AVMutableComposition → AVAssetExportSession 的 MediaEngine 导出路径可行
+（spike 执行方式第 3 项）。cut-quality 默认参数在正常语速素材上成立；
+快语速/带 BGM 素材待补测。
 
 ## 对候选路线的影响
 
@@ -91,4 +97,4 @@
 
 - [ ] 人工标注 `koubo-01.truth.json`（~100 词边界）后跑 `evaluate` 出量化报告
 - [ ] 补两段素材（快语速/带 BGM）凑齐评测集
-- [ ] earcheck 试听结论回填本文件
+- [x] earcheck 试听结论回填本文件（2026-07-26 通过，见上）

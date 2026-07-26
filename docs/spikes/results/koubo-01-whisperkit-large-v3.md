@@ -68,6 +68,7 @@
    chinese word timestamps 全部 0 命中——未被报告。
 5. **影响面**：所有对中文（简/繁）及粤语开 `wordTimestamps` 的 WhisperKit 用户。
 
+已提交上游：[issue #510](https://github.com/argmaxinc/argmax-oss-swift/issues/510) · [PR #511](https://github.com/argmaxinc/argmax-oss-swift/pull/511)（2026-07-26，fix + 中文回归测试）。合并后升级依赖即可移除 ZhWordSplitTokenizer 包装器。
 上游修复建议：最小改动 = 白名单匹配改前缀/Locale 映射（`zh-Hans`→`zh`）；
 设计正确版 = 仿 OpenAI 把解码语言传入 tokenizer（需动 `WhisperTokenizer` 协议）。
 

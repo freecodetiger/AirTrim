@@ -16,3 +16,5 @@ Models/
 
 # 私有测试素材（真实口播视频不入库；公共小样例放 Fixtures/public/）
 Fixtures/private/
+# 本机 SwiftPM workaround（见 docs/spikes/m0-asr-spike.md 环境备注）
+.local-tooling/

@@ -1,7 +1,7 @@
 # M0 Spike · 中文 ASR 词级时间戳验证
 
-> 状态：待执行。这是写任何产品代码之前的第一件事。
-> 结论产出 ADR-0006（ASR 选型），量化数据附在 `docs/spikes/results/`。
+> 状态：**评测装置已就绪**（2026-07-26），首个候选 WhisperKit 已接入并冒烟通过；
+> 待真实素材 + 人工标注后出量化报告。结论产出 ADR-0006（ASR 选型），量化数据附在 `docs/spikes/results/`。
 
 ## 为什么先做这个
 
@@ -39,6 +39,33 @@
 2. 每个候选跑同一评测集，脚本输出误差分布（中位/P95/直方图）+ RTF + CER。
 3. **耳朵验收**：用词级时间戳直接生成"删除所有 ≥500ms 停顿"的剪辑成片（AVMutableComposition 导出），听切点是否自然——这同时验证了 MediaEngine 路径的可行性。
 4. 报告 + 决策写入 ADR-0006；spike 代码保留在 `Sources/AirTrimSpike/` 供回归复测。
+
+## 评测装置（已实现 · `Sources/AirTrimSpike/` + `Sources/AirTrimSpikeKit/`)
+
+```bash
+# 1. 转写（首次自动下载模型；中文评测用 large-v3，快速冒烟用 tiny）
+swift run airtrim-spike transcribe --audio 素材.mov --model large-v3 --output pred.json
+
+# 2. 生成标注模板（referenceText 预填，boundaries 人工填 ~100 个词边界）
+swift run airtrim-spike gen-truth --transcript pred.json --output truth.json --prefill-every 5
+
+# 3. 评测：边界误差（中位/P95/直方图）+ CER + RTF，判定通过线
+swift run airtrim-spike evaluate --transcript pred.json --truth truth.json --report results/whisperkit.md
+
+# 4. 耳朵验收：剪除 ≥500ms 停顿导出成片（最小停顿保留 + 切口音量 ramp，不硬拼）
+swift run airtrim-spike earcheck --source 素材.mov --transcript pred.json --output tight.mov
+```
+
+纯逻辑（指标计算 / 停顿检测 / keep-range）在 `AirTrimSpikeKit`，有单元测试覆盖；
+冒烟结果（`say` 合成 7.3s 中文 + tiny 模型）：文本零错，但中文"词"粒度为整句——
+印证候选表对 WhisperKit 中文词边界的顾虑，量化结论待 large-v3 + 真实素材。
+
+### 本机环境备注（不影响其他机器）
+
+开发机 CLT 的 SwiftPM 插件接口与 dylib 版本不一致，任何带 plugin 的
+swift-argument-parser（≥1.3，WhisperKit 强制传递依赖）都无法编译。已用
+`swift package config set-mirror` 挂本地去插件镜像（`.local-tooling/`，已 gitignore）。
+根治方法：安装完整 Xcode 或重装 CLT 后，删除 `.swiftpm/configuration/mirrors.json` 即可。
 
 ## 失败预案
 

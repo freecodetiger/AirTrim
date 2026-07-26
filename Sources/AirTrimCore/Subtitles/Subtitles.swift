@@ -88,6 +88,17 @@ public enum Subtitles {
         return out
     }
 
+    /// 源时间轴 cue → 成片时间轴（剪辑后导出用）。
+    /// 完全落在被剪区间内的 cue 丢弃；跨切口的自然收缩。时间映射唯一来源是 EditList。
+    public static func retime(_ cues: [SubtitleCue], through edits: EditList) -> [SubtitleCue] {
+        cues.compactMap { cue in
+            let start = edits.outputTime(forSource: cue.start)
+            let end = edits.outputTime(forSource: cue.end)
+            guard CMTimeCompare(start, end) < 0 else { return nil }
+            return SubtitleCue(start: start, end: end, text: cue.text)
+        }
+    }
+
     /// SRT 序列化
     public static func srt(_ cues: [SubtitleCue]) -> String {
         cues.enumerated().map { i, c in

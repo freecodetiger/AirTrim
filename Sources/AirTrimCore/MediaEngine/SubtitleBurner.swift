@@ -31,30 +31,30 @@ public enum SubtitleBurner {
         init(_ session: AVAssetExportSession) { self.session = session }
     }
 
+    /// - Parameters:
+    ///   - cues: 源时间轴字幕（内部按 edits 重定时到成片轴）
+    ///   - edits: 剪辑状态（缺省空 = 整段直通，M1 行为不变）
     public static func burn(source: URL, cues: [SubtitleCue], to output: URL,
+                            edits: EditList = EditList(),
                             style: SubtitleStyle = SubtitleStyle(),
                             progress: (@Sendable (Double) -> Void)? = nil) async throws {
         let asset = AVURLAsset(url: source)
         guard let videoTrack = try await asset.loadTracks(withMediaType: .video).first else {
             throw MediaEngineError.noVideoTrack
         }
-        let duration = try await asset.load(.duration)
         let naturalSize = try await videoTrack.load(.naturalSize)
         let preferredTransform = try await videoTrack.load(.preferredTransform)
         let fps = try await videoTrack.load(.nominalFrameRate)
 
-        let composition = AVMutableComposition()
-        guard let compVideo = composition.addMutableTrack(
-            withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
+        // 预览与导出同一合成路径（跳切 + 切点音频淡化）
+        let composed = try await PreviewComposer.compose(url: source, edits: edits)
+        let composition = composed.composition
+        guard let compVideo = composition.tracks(withMediaType: .video).first else {
             throw MediaEngineError.compositionFailed
         }
+        let duration = composition.duration
         let fullRange = CMTimeRange(start: .zero, duration: duration)
-        try compVideo.insertTimeRange(fullRange, of: videoTrack, at: .zero)
-        if let audioTrack = try await asset.loadTracks(withMediaType: .audio).first,
-           let compAudio = composition.addMutableTrack(
-               withMediaType: .audio, preferredTrackID: kCMPersistentTrackID_Invalid) {
-            try compAudio.insertTimeRange(fullRange, of: audioTrack, at: .zero)
-        }
+        let renderCues = Subtitles.retime(cues, through: edits)
 
         let geometry = renderGeometry(naturalSize: naturalSize, preferredTransform: preferredTransform)
 
@@ -76,7 +76,7 @@ public enum SubtitleBurner {
         let parentLayer = CALayer()
         parentLayer.frame = videoLayer.frame
         parentLayer.addSublayer(videoLayer)
-        parentLayer.addSublayer(overlayLayer(cues: cues, renderSize: geometry.renderSize, style: style))
+        parentLayer.addSublayer(overlayLayer(cues: renderCues, renderSize: geometry.renderSize, style: style))
         CATransaction.commit()
         CATransaction.flush()
         videoComposition.animationTool = AVVideoCompositionCoreAnimationTool(
@@ -87,6 +87,7 @@ public enum SubtitleBurner {
             throw MediaEngineError.compositionFailed
         }
         session.videoComposition = videoComposition
+        session.audioMix = composed.audioMix
         session.outputURL = output
         session.outputFileType = .mp4
         try? FileManager.default.removeItem(at: output)

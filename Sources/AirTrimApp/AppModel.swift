@@ -47,6 +47,85 @@ final class AppModel: ObservableObject {
 
     private(set) var modelFolder: URL?
 
+    // MARK: - 多模型发现（设置页语音模型管理）
+
+    /// 所有本地已安装的模型。
+    @Published private(set) var installedModels: [InstalledModel] = []
+
+    /// 可下载的推荐预设。
+    let availablePresets = ModelPreset.available
+
+    /// 刷新已安装模型列表（设置页 onAppear 调用）。
+    func refreshInstalledModels() {
+        installedModels = Self.discoverInstalledModels(active: modelFolder)
+    }
+
+    /// 将指定模型设为活跃模型（用于转写）。
+    func setActiveModel(_ model: InstalledModel) {
+        guard model.directory != modelFolder else { return }
+        modelFolder = model.directory
+        refreshInstalledModels()
+    }
+
+    /// 扫描所有本地已安装的 WhisperKit 模型。
+    static func discoverInstalledModels(active activeURL: URL? = nil) -> [InstalledModel] {
+        let fm = FileManager.default
+        let searchDirs: [URL] = {
+            var dirs: [URL] = []
+            // 自管目录
+            if let entries = try? fm.contentsOfDirectory(
+                at: appSupportModels, includingPropertiesForKeys: nil) {
+                dirs.append(contentsOf: entries.map { $0.resolvingSymlinksInPath() })
+            }
+            // 活跃模型如果是外部目录也加入
+            if let active = activeURL,
+               !dirs.contains(where: { $0.path == active.resolvingSymlinksInPath().path }) {
+                dirs.append(active.resolvingSymlinksInPath())
+            }
+            return dirs
+        }()
+
+        let managedRoot = appSupportModels.resolvingSymlinksInPath().path
+        return searchDirs.compactMap { dir -> InstalledModel? in
+            let validation = ModelValidator.validate(at: dir)
+            // 至少要有核心组件才认为是模型
+            guard validation.hasAudioEncoder || validation.hasTextDecoder || validation.hasMelSpectrogram
+            else { return nil }
+            return InstalledModel(
+                id: dir.lastPathComponent,
+                name: dir.lastPathComponent,
+                directory: dir,
+                sizeBytes: ModelValidator.directorySize(at: dir),
+                isValid: validation.isValid,
+                isManaged: dir.path.hasPrefix(managedRoot)
+            )
+        }
+    }
+
+    /// 一键下载推荐模型。
+    func downloadPreset(_ preset: ModelPreset) {
+        guard installProgress == nil else { return }
+        installError = nil
+        let installer = ModelInstaller(manifest: preset.manifest, destination: Self.appSupportModels)
+        installProgress = InstallProgress(bytesDone: 0, bytesTotal: preset.manifest.totalBytes,
+                                          filesDone: 0, filesTotal: preset.manifest.files.count,
+                                          currentFile: "准备中…")
+        Task {
+            do {
+                let modelDir = try await installer.install { progress in
+                    Task { @MainActor [weak self] in self?.installProgress = progress }
+                }
+                self.installProgress = nil
+                self.modelFolder = modelDir
+                self.refreshInstalledModels()
+                if case .needsModel = stage { stage = .idle }
+            } catch {
+                self.installProgress = nil
+                self.installError = error.localizedDescription
+            }
+        }
+    }
+
     static let appSupportModels = FileManager.default
         .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         .appendingPathComponent("AirTrim/Models", isDirectory: true)
@@ -274,7 +353,7 @@ final class AppModel: ObservableObject {
 
     func aiResegment() {
         guard let transcript, !aiSegmenting else { return }
-        guard let config = LLMSettings.load() else {
+        guard let config = LLMConfig.load() else {
             aiError = LLMError.notConfigured.localizedDescription
             return
         }
@@ -438,12 +517,13 @@ final class AppModel: ObservableObject {
 
     var lastProjectURL: URL? { ProjectStore.lastOpenedURL() }
 
-    // MARK: - 模型管理（设置页）
+    // MARK: - 模型管理（设置窗口）
 
+    /// 模型目录磁盘占用（字节，nil = 未安装）。
     var modelDiskBytes: Int64? {
-        guard let modelFolder,
+        guard let folder = modelFolder,
               let files = FileManager.default.enumerator(
-                  at: modelFolder, includingPropertiesForKeys: [.fileSizeKey]) else { return nil }
+                  at: folder, includingPropertiesForKeys: [.fileSizeKey]) else { return nil }
         var total: Int64 = 0
         for case let url as URL in files {
             total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0)
@@ -451,26 +531,50 @@ final class AppModel: ObservableObject {
         return total
     }
 
+    /// 模型是否在应用自管目录下。
+    var isModelManaged: Bool {
+        guard let folder = modelFolder else { return false }
+        return folder.resolvingSymlinksInPath().path
+            .hasPrefix(Self.appSupportModels.resolvingSymlinksInPath().path)
+    }
+
     func revealModelInFinder() {
-        guard let modelFolder else { return }
-        NSWorkspace.shared.activateFileViewerSelecting([modelFolder])
+        guard let folder = modelFolder else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([folder])
     }
 
-    /// 只删应用自管目录里的模型（用户自选的外部目录只解除引用，不动文件）
-    func deleteModel() {
-        guard let modelFolder else { return }
-        let managedRoot = Self.appSupportModels.resolvingSymlinksInPath().path
-        if modelFolder.resolvingSymlinksInPath().path.hasPrefix(managedRoot) {
-            try? FileManager.default.removeItem(at: modelFolder)
-        }
-        self.modelFolder = nil
-        if transcript == nil { stage = .needsModel }
-    }
-
-    /// 重新下载 = 清单校验 + 缺损补齐（installer 自动跳过完整文件）
+    /// 校验并修复模型：按清单对比文件尺寸，缺损部分断点续传补齐。
     func repairModel() {
-        stage = .needsModel
-        downloadModel()
+        guard let folder = modelFolder else { return }
+        installError = nil
+        let destination = folder.deletingLastPathComponent()
+        let installer = ModelInstaller(manifest: .largeV3, destination: destination)
+        installProgress = InstallProgress(bytesDone: 0, bytesTotal: ModelManifest.largeV3.totalBytes,
+                                          filesDone: 0, filesTotal: 27, currentFile: "校验中…")
+        Task {
+            do {
+                let repairedDir = try await installer.install { progress in
+                    Task { @MainActor [weak self] in self?.installProgress = progress }
+                }
+                self.installProgress = nil
+                self.modelFolder = repairedDir
+            } catch {
+                self.installProgress = nil
+                self.installError = error.localizedDescription
+            }
+        }
+    }
+
+    /// 删除应用自管目录下的模型文件（约 3.1 GB），外部模型目录仅解除引用。
+    func deleteModel() {
+        guard let folder = modelFolder else { return }
+        let managedRoot = Self.appSupportModels.resolvingSymlinksInPath().path
+        if folder.resolvingSymlinksInPath().path.hasPrefix(managedRoot) {
+            try? FileManager.default.removeItem(at: folder)
+        }
+        modelFolder = Self.discoverModel()
+        refreshInstalledModels()
+        if modelFolder == nil && transcript == nil { stage = .needsModel }
     }
 
     // MARK: - 预览播放（UI 层；时间只从 Transcript 派生）

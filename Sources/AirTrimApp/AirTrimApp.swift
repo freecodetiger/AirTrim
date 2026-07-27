@@ -28,108 +28,12 @@ struct AirTrimApp: App {
                 Button("重新转写（忽略缓存）") { model.retranscribe() }
                     .disabled(model.sourceURL == nil)
             }
-        }
-
-        Settings {
-            TabView {
-                LLMSettingsView()
-                    .tabItem { Label("AI 服务", systemImage: "sparkles") }
-                ModelSettingsView()
-                    .tabItem { Label("模型", systemImage: "cpu") }
-            }
-            .environmentObject(model)
-        }
-    }
-}
-
-/// 模型管理：状态 · 磁盘占用 · 校验修复 · 删除（onboarding 之外的唯一模型入口）
-struct ModelSettingsView: View {
-    @EnvironmentObject var model: AppModel
-    @State private var confirmDelete = false
-
-    var body: some View {
-        Form {
-            if let folder = model.modelFolder {
-                Section("语音识别模型（本地，转写全程离线）") {
-                    LabeledContent("状态", value: "已就绪")
-                    LabeledContent("位置", value: folder.path)
-                    if let bytes = model.modelDiskBytes {
-                        LabeledContent("磁盘占用",
-                                       value: ByteCountFormatter.string(fromByteCount: bytes,
-                                                                        countStyle: .file))
-                    }
-                    HStack {
-                        Button("在访达中显示") { model.revealModelInFinder() }
-                        Button("校验并修复…") { model.repairModel() }
-                            .help("按清单核对所有文件尺寸，缺损部分断点续传补齐")
-                        Button("删除模型…", role: .destructive) { confirmDelete = true }
-                    }
-                }
-            } else {
-                Section("语音识别模型") {
-                    if let progress = model.installProgress {
-                        ProgressView(value: progress.fraction)
-                        Text("\(Int(progress.fraction * 100))% · \(progress.currentFile)")
-                            .font(.caption).foregroundStyle(.secondary)
-                    } else {
-                        LabeledContent("状态", value: "未安装")
-                        Button("下载模型（3.1 GB）") { model.downloadModel() }
-                        Button("已有模型？选择目录…") { model.chooseModelFolder() }
-                            .buttonStyle(.link)
-                    }
-                    if let error = model.installError {
-                        Text(error).font(.caption).foregroundStyle(.red)
-                    }
-                }
+            CommandGroup(replacing: .appSettings) {
+                Button("设置…") { SettingsWindowManager.open(model: model) }
+                    .keyboardShortcut(",", modifiers: .command)
             }
         }
-        .padding(20)
-        .frame(width: 480)
-        .alert("删除模型？", isPresented: $confirmDelete) {
-            Button("删除", role: .destructive) { model.deleteModel() }
-            Button("取消", role: .cancel) {}
-        } message: {
-            Text("将删除应用自管目录下的模型文件（约 3.1 GB），之后可随时重新下载。用户自选的外部模型目录不会被删除，仅解除引用。")
-        }
-    }
-}
 
-/// BYOK 设置（OpenAI 兼容端点）：Key 存 Keychain，不落任何配置文件
-struct LLMSettingsView: View {
-    @State private var baseURL = LLMSettings.defaultBaseURL
-    @State private var modelName = LLMSettings.defaultModel
-    @State private var apiKey = ""
-    @State private var status: String?
-
-    var body: some View {
-        Form {
-            Section("AI 服务（OpenAI 兼容格式 · 只上传文字稿，绝不上传音视频）") {
-                TextField("API 地址", text: $baseURL,
-                          prompt: Text("https://api.deepseek.com 或 https://api.openai.com/v1"))
-                TextField("模型", text: $modelName, prompt: Text("deepseek-chat"))
-                SecureField("API Key", text: $apiKey, prompt: Text("sk-…"))
-                HStack {
-                    Button("保存") {
-                        do {
-                            try LLMSettings.save(baseURLString: baseURL, model: modelName, apiKey: apiKey)
-                            status = "已保存（Key 存入钥匙串）"
-                        } catch {
-                            status = error.localizedDescription
-                        }
-                    }
-                    if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
-                }
-            }
-        }
-        .padding(20)
-        .frame(width: 440)
-        .onAppear {
-            if let config = LLMSettings.load() {
-                baseURL = config.baseURL.absoluteString
-                modelName = config.model
-                apiKey = config.apiKey
-            }
-        }
     }
 }
 
@@ -252,10 +156,7 @@ struct FailedView: View {
             Image(systemName: "exclamationmark.triangle").font(.system(size: 40))
                 .foregroundStyle(.orange)
             Text(message).multilineTextAlignment(.center)
-            HStack {
-                Button("返回") { model.stage = .idle }
-                SettingsLink { Text("打开设置") }
-            }
+            Button("返回") { model.stage = .idle }
         }
         .padding(40)
     }
@@ -298,21 +199,32 @@ struct EditorView: View {
                     }
                 }
                 .disabled(model.aiSegmenting)
-                .help("按语义重新断句（需在设置里配置 API Key，⌘, 打开设置）")
+                .help("按语义重新断句（需配置 LLM）")
+
+                Menu {
+                    Button {
+                        model.exportSRT()
+                    } label: {
+                        Label("导出 SRT 字幕", systemImage: "doc.plaintext")
+                    }
+                    Button {
+                        model.exportBurnedVideo()
+                    } label: {
+                        Label("导出视频（烧录字幕）", systemImage: "film.stack")
+                    }
+                    .disabled(model.burnProgress != nil)
+                } label: {
+                    Label("导出", systemImage: "square.and.arrow.up")
+                }
+                .help("导出 SRT 字幕或烧录字幕的视频")
 
                 Button {
-                    model.exportSRT()
+                    SettingsWindowManager.open(model: model)
                 } label: {
-                    Label("导出 SRT", systemImage: "square.and.arrow.up")
+                    Label("设置", systemImage: "gearshape")
                 }
+                .help("AI 服务配置 · 模型管理")
 
-                Button {
-                    model.exportBurnedVideo()
-                } label: {
-                    Label("导出视频", systemImage: "film.stack")
-                }
-                .disabled(model.burnProgress != nil)
-                .help("把字幕烧录进视频，导出 MP4")
             }
         }
         .sheet(isPresented: Binding(

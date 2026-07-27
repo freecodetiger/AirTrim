@@ -23,6 +23,13 @@ enum ProjectStore {
             .appendingPathComponent("AirTrim/Projects", isDirectory: true)
     }
 
+    /// 与 UserDefaults 解耦：裸二进制（open）和 Xcode 启动使用的 domain 不同，
+    /// 写到文件保证任何启动方式都能读到。
+    static var lastOpenedFile: URL {
+        // 往上一级写到 AirTrim/ 根，和 Projects/ Models/ 同级
+        dir.deletingLastPathComponent().appendingPathComponent("last-opened.txt")
+    }
+
     static let lastOpenedKey = "project.lastOpenedPath"
 
     /// 指纹 = 路径 + 大小 + 修改时间；源文件变动即失效
@@ -61,7 +68,8 @@ enum ProjectStore {
         if let data = try? JSONEncoder().encode(doc) {
             try? data.write(to: fileURL(fingerprint: fp), options: .atomic)
         }
-        UserDefaults.standard.set(source.path, forKey: lastOpenedKey)
+        // 文件持久化：与 UserDefaults domain 无关，任何启动方式都能恢复
+        try? source.path.write(to: lastOpenedFile, atomically: true, encoding: .utf8)
     }
 
     static func discard(for source: URL) {
@@ -70,9 +78,19 @@ enum ProjectStore {
         }
     }
 
-    /// 上次打开且缓存仍有效的源文件
+    /// 上次打开且缓存仍有效的源文件。
+    /// 优先读文件（与 UserDefaults domain 无关），回退 UserDefaults（兼容旧版缓存）。
     static func lastOpenedURL() -> URL? {
-        guard let path = UserDefaults.standard.string(forKey: lastOpenedKey) else { return nil }
+        // 优先读文件持久化路径
+        let path: String?
+        if let filePath = try? String(contentsOf: lastOpenedFile, encoding: .utf8),
+           !filePath.isEmpty {
+            path = filePath
+        } else {
+            // 回退：旧版用 UserDefaults 存的路径
+            path = UserDefaults.standard.string(forKey: lastOpenedKey)
+        }
+        guard let path else { return nil }
         let url = URL(fileURLWithPath: path)
         guard FileManager.default.fileExists(atPath: path), load(for: url) != nil else { return nil }
         return url

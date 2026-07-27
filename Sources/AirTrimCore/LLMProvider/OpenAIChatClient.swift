@@ -52,7 +52,7 @@ public enum LLMError: Error, LocalizedError {
 
     public var errorDescription: String? {
         switch self {
-        case .notConfigured: "未配置 LLM（设置里填入 API 地址与 Key）"
+        case .notConfigured: "未配置 LLM（请打开设置 → AI 服务 → 填写 API Key 并保存）"
         case .badResponse(let detail): "LLM 请求失败：\(detail)"
         case .textMismatch: "模型改动了文本内容，已放弃本次断句（可重试）"
         }

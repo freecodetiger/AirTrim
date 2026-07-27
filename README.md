@@ -5,7 +5,7 @@
 AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创作者。它不是另一个多轨剪辑器——它相信：**对口播视频，文字稿才是最高效的剪辑界面**。
 
 ```
-导入视频 → 本地转写（词级时间戳）→ 文字稿即剪辑
+导入视频 → 本地转写（词级时间戳）→ 文字稿即剪辑界面
         → 一键紧凑（停顿 / 语气词 / 结合全文的废话）→ 带字幕导出
 ```
 
@@ -21,26 +21,31 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 
 ## 状态
 
-🚧 **Alpha · M1（字幕工具）功能就绪，发布打磨中。** 已可用：
+🚧 **Alpha · M2（一键紧凑）功能就绪。** 已可用：
 
 - 导入口播视频 → **全本地**转写（WhisperKit large-v3，词级时间戳，中文优化）
 - 逐句编辑器：改错字、拆句/合句、整句试听、当前句跟随高亮
-- **AI 语义断句**（可选）：OpenAI 兼容 API 自带 Key（DeepSeek 等）；只上传文字稿，时间戳永远来自本地
+- **AI 语义断句**（可选）：OpenAI 兼容 API 自带 Key（DeepSeek 等）；设置窗口填写 API Key 并保存，JSON 文件持久化
+- **一键紧凑**（可调强度滑杆）：VAD 交叉验证停顿分析 → 建议式审阅 → 逐条接受/拒绝/跳听 → 成片实时预览
+- 波形时间线：显示剪切区间，scrub 定位
 - 导出 SRT / **字幕烧录 MP4**（白字黑边、竖拍横拍自适应；源文件只读，输出新文件）
 - 项目持久化：重启秒恢复上次会话，每次修订即落盘
-- 应用内模型下载（3.1 GB，断点续传，国内自动走镜像源）
+- 设置窗口（⌘,）：AI 服务配置 + 语音模型管理（多模型发现、一键下载推荐档位、校验修复）
+- 应用内模型下载（large-v3 ~3.1 GB，断点续传，国内自动走镜像源）
 
-路线：**M0** ASR 验证（✅ 已达标，[报告](docs/spikes/results/koubo-01-whisperkit-large-v3.md)）→ **M1** 字幕工具（当前）→ **M2** 一键紧凑 → **M3** AI 建议闭环。详见 [docs/roadmap.md](docs/roadmap.md)。
+路线：**M0** ASR 验证（✅）→ **M1** 字幕工具（✅）→ **M2** 一键紧凑（当前）→ **M3** AI 建议闭环。详见 [docs/roadmap.md](docs/roadmap.md)。
 
 > M0 过程中发现并修复了 WhisperKit 的中文词级时间戳截断 bug（语言检测返回 `zh-Hans` 未命中白名单 `zh`），已向上游提交 [issue #510](https://github.com/argmaxinc/argmax-oss-swift/issues/510) 与 [PR #511](https://github.com/argmaxinc/argmax-oss-swift/pull/511)；合并前应用内置逐字切词兜底。
 
 ## 使用
 
-1. `scripts/make-app.sh` 构建 `build/AirTrim.app`，双击启动（正式 DMG 见 Releases，发布后提供）。
-2. 首次启动引导下载语音模型（一次性，3.1 GB）。
-3. 拖入口播视频 → 等待本地转写（有真实进度条）→ 逐句编辑。
-4. 可选：设置（⌘,）→ AI 服务 填入 OpenAI 兼容 API 地址与 Key，工具栏「AI 断句」按语义重新断句。
+1. `swift build && scripts/bundle-app.sh` 构建 `.app` bundle（macOS 要求 GUI 应用必须是 bundle）。
+2. 首次启动引导下载语音模型（一次性，~3.1 GB）。
+3. 拖入口播视频 → 等待本地转写 → 逐句编辑 + 一键紧凑。
+4. 可选：设置（⌘,）→ AI 服务 填入 OpenAI 兼容 API 地址与 Key，保存后工具栏「AI 断句」可用。
 5. 工具栏导出 SRT，或「导出视频」直接烧录字幕。
+
+> **LLM 配置**：通过设置窗口 AI 服务页编辑保存，持久化到 `~/Library/Application Support/AirTrim/llm-config.json`。不使用环境变量或 Keychain。
 
 ## 设计文档
 
@@ -48,6 +53,8 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 - [职责边界表](docs/architecture/ownership-map.md) —— 每个关注点的唯一 owner
 - [决策记录 ADR](docs/adr/) —— 为什么开源 / 为什么 AVFoundation 不用 ffmpeg / 为什么 BYOK / 为什么非破坏性 EDL / v1 范围
 - [M0 spike 计划](docs/spikes/m0-asr-spike.md) —— ASR 选型的量化验证方案
+- [设置界面设计](.claude/settings-design-v2.md) —— 分级设置 + 语音模型管理方案
+- [M2 一键紧凑设计](docs/design/m2-tighten.md) —— EditList 模型、停顿分析、预览合成
 
 ## 构建
 
@@ -57,6 +64,7 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 swift build                      # 构建
 swift test                       # 全量测试（swift-testing）
 scripts/check-architecture.sh    # 分层守卫（Core 无 UI；网络仅 LLMProvider）
+scripts/bundle-app.sh            # 组装 .app bundle（macOS GUI 窗口管理必需）
 scripts/make-app.sh              # 打包 build/AirTrim.app（含图标，ad-hoc 签名）
 scripts/make-dmg.sh              # 打包 build/AirTrim-<版本>.dmg
 ```

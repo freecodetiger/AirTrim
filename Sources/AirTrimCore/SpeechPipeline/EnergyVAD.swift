@@ -9,7 +9,8 @@ public enum EnergyVAD {
         sampleRate: Int32,
         frameDuration: Double = 0.02,
         marginDB: Double = 10,
-        minDuration: Double = 0.5
+        minDuration: Double = 0.5,
+        spikePeak: Float = 0.1
     ) -> [SilenceInterval] {
         let frameLen = max(1, Int(frameDuration * Double(sampleRate)))
         guard samples.count >= frameLen, sampleRate > 0 else { return [] }
@@ -40,7 +41,17 @@ public enum EnergyVAD {
 
         var result: [SilenceInterval] = []
         var silentStart: Int? = nil
+        // 瞬态尖峰帧（RMS 低但 peak 超线，如咀嘴声/碰麦）分裂静音段而非污染整段：
+        // 孤立喀嗒 → 两侧干净子段保留；持续低语 → 碎段被 minDuration 丢弃（宁可少剪不变）
         func emit(from s: Int, to e: Int) {
+            var subStart = s
+            for idx in s..<e where framePeak[idx] > spikePeak {
+                emitClean(from: subStart, to: idx)
+                subStart = idx + 1
+            }
+            emitClean(from: subStart, to: e)
+        }
+        func emitClean(from s: Int, to e: Int) {
             guard Double(e - s) * frameDuration >= minDuration else { return }
             result.append(SilenceInterval(
                 start: CMTime(value: CMTimeValue(s * frameLen), timescale: sampleRate),

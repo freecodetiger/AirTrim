@@ -93,6 +93,58 @@ struct SubtitleCueTests {
     }
 }
 
+@Suite("字幕词级剔除（M3：字幕与音画一致）")
+struct SubtitleWordCutTests {
+    /// 一句三词：中间「嗯」被 filler 切口完全覆盖
+    var t: Transcript {
+        transcript([word("今天", 0, 0.5), word("嗯", 0.7, 0.9), word("很好。", 1.2, 2.0)])
+    }
+
+    @Test func fullyCutWordIsRemovedFromCueText() {
+        var edits = EditList()
+        edits.add(CMTimeRange(start: CMTime(seconds: 0.55, preferredTimescale: 600),
+                              end: CMTime(seconds: 1.1, preferredTimescale: 600)))
+        let cues = Subtitles.cues(transcript: t, edits: edits)
+        #expect(cues.count == 1)
+        #expect(cues[0].text == "今天很好。")
+    }
+
+    @Test func partiallyOverlappedWordIsKept() {
+        // 切口只擦到「嗯」前半 → 词保留（宁可多留字）
+        var edits = EditList()
+        edits.add(CMTimeRange(start: CMTime(seconds: 0.55, preferredTimescale: 600),
+                              end: CMTime(seconds: 0.8, preferredTimescale: 600)))
+        let cues = Subtitles.cues(transcript: t, edits: edits)
+        #expect(cues[0].text == "今天嗯很好。")
+    }
+
+    @Test func overriddenSentenceIsExemptFromWordCut() {
+        // 用户手改文本优先：不做词级剔除
+        var edits = EditList()
+        edits.add(CMTimeRange(start: CMTime(seconds: 0.55, preferredTimescale: 600),
+                              end: CMTime(seconds: 1.1, preferredTimescale: 600)))
+        let patch = TranscriptPatch(textOverrides: [0: "手改的文本。"])
+        let cues = Subtitles.cues(transcript: t, patch: patch, edits: edits)
+        #expect(cues.count == 1)
+        #expect(cues[0].text == "手改的文本。")
+    }
+
+    @Test func fullyCutSentenceProducesNoCue() {
+        // 整句剪光（verbosity 整句剪除）→ 该句无 cue
+        let two = transcript([word("废话。", 0, 1.0), word("正文。", 1.5, 2.5)])
+        var edits = EditList()
+        edits.add(CMTimeRange(start: CMTime(seconds: 0, preferredTimescale: 600),
+                              end: CMTime(seconds: 1.2, preferredTimescale: 600)))
+        let cues = Subtitles.cues(transcript: two, edits: edits)
+        #expect(cues.count == 1)
+        #expect(cues[0].text == "正文。")
+    }
+
+    @Test func noEditsKeepsLegacyBehavior() {
+        #expect(Subtitles.cues(transcript: t)[0].text == "今天嗯很好。")
+    }
+}
+
 @Suite("TranscriptPatch")
 struct PatchTests {
     // 两句：`0..<2` 与 `2..<4`

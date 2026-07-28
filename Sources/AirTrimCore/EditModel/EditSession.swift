@@ -32,8 +32,10 @@ public struct EditSession: Sendable, Equatable {
             suggestions[i].state = .rejected
         }
 
-        /// 一键紧凑：全收 proposed（pause/filler 可一键，verbosity 由调用方过滤——M3）
+        /// 一键全收 proposed。verbosity 在模型层硬性拒绝（D-M3-2，防线不只靠 UI）：
+        /// 废话建议必须人工逐条/按类确认（CLAUDE.md 禁止事项）
         public mutating func acceptAllProposed(of kind: EditSuggestion.Kind) {
+            guard kind != .verbosity else { return }
             for s in suggestions where s.state == .proposed && s.kind == kind {
                 accept(suggestionID: s.id)
             }

@@ -8,6 +8,8 @@ struct TrackAreaView: View {
     @EnvironmentObject var model: AppModel
     /// 1 = 整段适配窗宽；>1 放大（横向滚动）
     @State private var zoom: CGFloat = 1
+    /// 拖动 scrub 中：挂起播放跟随滚动，否则内容会在手指下被拽走
+    @State private var scrubbing = false
 
     private var durationSeconds: Double {
         max(model.transcript?.sourceDuration.seconds ?? 0, 0.001)
@@ -22,7 +24,7 @@ struct TrackAreaView: View {
                             .id("track")
                     }
                     .onChange(of: model.currentSourceSeconds) { _, seconds in
-                        guard model.isPlaying, zoom > 1 else { return }
+                        guard model.isPlaying, zoom > 1, !scrubbing else { return }
                         // 跟随播放：把播放头维持在可视区中部
                         proxy.scrollTo("playhead", anchor: .center)
                     }
@@ -61,7 +63,8 @@ struct TrackAreaView: View {
         .contentShape(Rectangle())
         .gesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { model.scrub(toSourceSeconds: $0.location.x / pps) }
+                .onChanged { scrubbing = true; model.scrub(toSourceSeconds: $0.location.x / pps) }
+                .onEnded { _ in scrubbing = false }
         )
     }
 
@@ -137,15 +140,16 @@ struct TrackAreaView: View {
         }
     }
 
-    /// 停顿建议块（proposed 橙色，点击弹审阅泡）
+    /// 建议块（proposed，按 kind 着色：停顿橙 / 语气词蓝 / 废话紫），点击弹审阅泡
     private func suggestionBlocks(pps: CGFloat) -> some View {
-        ForEach(model.proposedPauses) { suggestion in
+        ForEach(model.proposedSuggestions) { suggestion in
             let x = suggestion.originalGap.start.seconds * pps
             let w = max(suggestion.originalGap.duration.seconds * pps, 6)
+            let color = Self.color(for: suggestion.kind)
             RoundedRectangle(cornerRadius: 3)
-                .fill(Color.orange.opacity(0.55))
+                .fill(color.opacity(0.55))
                 .overlay(RoundedRectangle(cornerRadius: 3)
-                    .strokeBorder(Color.orange, lineWidth: 1))
+                    .strokeBorder(color, lineWidth: 1))
                 .frame(width: w, height: 62)
                 .offset(x: x, y: 20)
                 .onTapGesture { model.selectedSuggestionID = suggestion.id }
@@ -155,7 +159,27 @@ struct TrackAreaView: View {
                 )) {
                     SuggestionReviewPopover(suggestion: suggestion)
                 }
-                .help("停顿 \(String(format: "%.1f", suggestion.originalGap.duration.seconds))s，建议剪 \(String(format: "%.1f", suggestion.cut.duration.seconds))s")
+                .help(Self.helpText(for: suggestion))
+        }
+    }
+
+    static func color(for kind: EditSuggestion.Kind) -> Color {
+        switch kind {
+        case .pause: .orange
+        case .filler: .blue
+        case .verbosity: .purple
+        }
+    }
+
+    static func helpText(for s: EditSuggestion) -> String {
+        let saved = String(format: "%.1f", s.cut.duration.seconds)
+        switch s.kind {
+        case .pause:
+            return "停顿 \(String(format: "%.1f", s.originalGap.duration.seconds))s，建议剪 \(saved)s"
+        case .filler:
+            return "语气词「\(s.detail ?? "")」，建议剪 \(saved)s"
+        case .verbosity:
+            return "\(s.category.map(verbosityLabel) ?? "废话")，建议整句剪 \(saved)s"
         }
     }
 
@@ -182,9 +206,20 @@ struct TrackAreaView: View {
     }
 }
 
-/// 紧凑度控制条：滑杆（松→紧）· 一键紧凑 · 已省时长 · 原片/成片预览切换
+/// verbosity 分类的显示名（LLM 契约四分类）
+func verbosityLabel(_ c: EditSuggestion.VerbosityCategory) -> String {
+    switch c {
+    case .repetition: "重复表达"
+    case .falseStart: "口误重来"
+    case .offTopic: "离题"
+    case .padding: "凑字"
+    }
+}
+
+/// 建议控制条：紧凑度滑杆 · 一键紧凑 · 清除语气词 · 识别废话 · 原片/成片切换
 struct TightenBar: View {
     @EnvironmentObject var model: AppModel
+    @State private var showVerbosityPanel = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -209,6 +244,40 @@ struct TightenBar: View {
                 Text("没有可剪的停顿").font(.caption).foregroundStyle(.secondary)
             }
 
+            Divider().frame(height: 16)
+
+            // 清除语气词（本地词表，即时）
+            Button("清除语气词") { model.runFillerAnalysis() }
+                .disabled(model.transcript?.silences.isEmpty ?? true)
+                .help((model.transcript?.silences.isEmpty ?? true)
+                    ? "波形分析中，稍候再试"
+                    : "本地词表匹配嗯/啊/呃等语气词，即时出建议")
+            if !model.proposedFillers.isEmpty {
+                let savings = model.proposedFillers.reduce(0.0) { $0 + $1.cut.duration.seconds }
+                Text("\(model.proposedFillers.count) 个语气词 · 可省 \(String(format: "%.1f", savings))s")
+                    .font(.caption).foregroundStyle(.blue)
+                Button("全部接受") { model.acceptAllFillers() }
+                    .help("接受全部语气词建议（⌘Z 可整体撤销）")
+            } else if model.lastFillerRunFound == 0 {
+                Text("未发现语气词").font(.caption).foregroundStyle(.secondary)
+            }
+
+            Divider().frame(height: 16)
+
+            // 识别废话（LLM，异步可取消；建议永不自动接受）
+            if model.verbosityRunning {
+                ProgressView().controlSize(.small)
+                Button("取消") { model.cancelVerbosityAnalysis() }
+            } else {
+                Button("识别废话") { model.requestVerbosityAnalysis() }
+                    .help("LLM 通读文字稿找可整句删除的废话（只上传文字，需配置 LLM）")
+            }
+            if !model.proposedVerbosity.isEmpty {
+                Button("\(model.proposedVerbosity.count) 处废话 · 审阅") { showVerbosityPanel = true }
+                    .popover(isPresented: $showVerbosityPanel) { VerbosityReviewPanel() }
+                    .foregroundStyle(.purple)
+            }
+
             if model.removedSeconds > 0 {
                 Text("已剪 \(String(format: "%.1f", model.removedSeconds))s")
                     .font(.caption).foregroundStyle(.red)
@@ -224,21 +293,141 @@ struct TightenBar: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .background(Color(nsColor: .underPageBackgroundColor))
+        .sheet(isPresented: $model.showVerbosityTopicPrompt) { VerbosityTopicSheet() }
+        .alert("识别废话失败", isPresented: Binding(
+            get: { model.verbosityError != nil },
+            set: { if !$0 { model.verbosityError = nil } }
+        )) {
+            Button("好") { model.verbosityError = nil }
+        } message: {
+            Text(model.verbosityError ?? "")
+        }
     }
 }
 
-/// 建议审阅泡：跳听 / 接受 / 拒绝（cut-quality skill 审阅交互）
+/// 发起废话识别前的可选主题输入（提升离题判定）
+struct VerbosityTopicSheet: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("识别废话").font(.headline)
+            Text("LLM 通读文字稿，找出重复表达、口误重来、离题、凑字的句子。\n只上传文字稿；建议需逐条审阅，永不自动接受。")
+                .font(.caption).foregroundStyle(.secondary)
+            TextField("视频主题（可选，提升离题判定）", text: $model.verbosityTopic)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("取消") { model.showVerbosityTopicPrompt = false }
+                Button("开始识别") {
+                    model.showVerbosityTopicPrompt = false
+                    model.runVerbosityAnalysis()
+                }
+                .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 400)
+    }
+}
+
+/// 废话审阅面板：按类分组 + 低置信（<0.5）折叠 + 按类批量接受。
+/// 没有「全部接受」——verbosity 永不自动接受（D-M3-2）。
+struct VerbosityReviewPanel: View {
+    @EnvironmentObject var model: AppModel
+
+    private var highConfidence: [EditSuggestion] {
+        model.proposedVerbosity.filter { ($0.confidence ?? 0) >= 0.5 }
+    }
+
+    private var lowConfidence: [EditSuggestion] {
+        model.proposedVerbosity.filter { ($0.confidence ?? 0) < 0.5 }
+    }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("废话建议 · 逐条或按类接受").font(.headline)
+                ForEach(EditSuggestion.VerbosityCategory.allCases, id: \.self) { category in
+                    let items = highConfidence.filter { $0.category == category }
+                    if !items.isEmpty {
+                        HStack {
+                            Text(verbosityLabel(category)).font(.subheadline).bold()
+                            Spacer()
+                            Button("接受这 \(items.count) 条") {
+                                model.acceptVerbosity(category: category)
+                            }
+                            .controlSize(.small)
+                            .help("批量接受本类建议（⌘Z 一步整体撤销）")
+                        }
+                        ForEach(items) { row($0) }
+                    }
+                }
+                if !lowConfidence.isEmpty {
+                    DisclosureGroup("低置信（\(lowConfidence.count) 条）") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            ForEach(lowConfidence) { row($0) }
+                        }
+                    }
+                    .font(.caption)
+                }
+            }
+            .padding(14)
+        }
+        .frame(width: 380, height: 340)
+    }
+
+    private func row(_ s: EditSuggestion) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(s.detail ?? "").font(.caption)
+            HStack(spacing: 6) {
+                Text(String(format: "剪 %.1fs · 置信 %.0f%%",
+                            s.cut.duration.seconds, (s.confidence ?? 0) * 100))
+                    .font(.caption2).foregroundStyle(.secondary)
+                Spacer()
+                Button("跳听") { model.audition(suggestionID: s.id) }.controlSize(.small)
+                Button("拒绝") { model.reject(suggestionID: s.id) }.controlSize(.small)
+                Button("剪掉") { model.accept(suggestionID: s.id) }.controlSize(.small)
+            }
+        }
+        .padding(6)
+        .background(RoundedRectangle(cornerRadius: 4).fill(Color.purple.opacity(0.08)))
+    }
+}
+
+/// 建议审阅泡：跳听 / 接受 / 拒绝（cut-quality skill 审阅交互），按 kind 出文案
 struct SuggestionReviewPopover: View {
     @EnvironmentObject var model: AppModel
     let suggestion: EditSuggestion
 
+    private var savedText: String { String(format: "%.1f", suggestion.cut.duration.seconds) }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Label("停顿 \(String(format: "%.1f", suggestion.originalGap.duration.seconds)) 秒 · 建议剪掉 \(String(format: "%.1f", suggestion.cut.duration.seconds)) 秒",
-                  systemImage: "waveform.badge.minus")
-                .font(.callout)
-            Text("保留自然停顿，切点带词边界保护")
-                .font(.caption).foregroundStyle(.secondary)
+            switch suggestion.kind {
+            case .pause:
+                Label("停顿 \(String(format: "%.1f", suggestion.originalGap.duration.seconds)) 秒 · 建议剪掉 \(savedText) 秒",
+                      systemImage: "waveform.badge.minus")
+                    .font(.callout)
+                Text("保留自然停顿，切点带词边界保护")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .filler:
+                Label("语气词「\(suggestion.detail ?? "")」 · 建议剪掉 \(savedText) 秒",
+                      systemImage: "bubble.left")
+                    .font(.callout)
+                Text("删词后两侧停顿合并，不留双倍空洞；字幕同步剔词")
+                    .font(.caption).foregroundStyle(.secondary)
+            case .verbosity:
+                Label("\(suggestion.category.map(verbosityLabel) ?? "废话") · 建议整句剪除 \(savedText) 秒",
+                      systemImage: "text.badge.minus")
+                    .font(.callout)
+                Text(suggestion.detail ?? "")
+                    .font(.caption).foregroundStyle(.secondary)
+                if let confidence = suggestion.confidence {
+                    Text("置信度 \(Int(confidence * 100))%")
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            }
             HStack {
                 Button {
                     model.audition(suggestionID: suggestion.id)

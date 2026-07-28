@@ -28,8 +28,11 @@ public enum Subtitles {
     }
 
     /// Transcript + Patch → 字幕条。
-    /// 被 Patch 覆盖过文本的句子不再按词折分（词级时间与新文本不再对齐），整句成条。
+    /// 被 Patch 覆盖过文本的句子不再按词折分（词级时间与新文本不再对齐），整句成条；
+    /// 用户手改文本优先，也不做词级剔除。
+    /// 无覆盖的句子：词区间完全落入 edits 切口的词从 cue 文本剔除（字幕与音画一致，M3）。
     public static func cues(transcript: Transcript, patch: TranscriptPatch = TranscriptPatch(),
+                            edits: EditList = EditList(),
                             rules: Rules = Rules()) -> [SubtitleCue] {
         var cues: [SubtitleCue] = []
         for sentence in patch.effectiveSentences(in: transcript) {
@@ -41,13 +44,15 @@ public enum Subtitles {
                 }
                 continue
             }
-            cues.append(contentsOf: split(sentence: sentence, in: transcript, rules: rules))
+            cues.append(contentsOf: split(sentence: sentence, in: transcript,
+                                          edits: edits, rules: rules))
         }
         return postProcess(cues, rules: rules)
     }
 
-    /// 超长句按词边界折分为多条
-    static func split(sentence: TranscriptSentence, in t: Transcript, rules: Rules) -> [SubtitleCue] {
+    /// 超长句按词边界折分为多条；被剪掉的词不进 cue（整句剪光则该句无 cue）
+    static func split(sentence: TranscriptSentence, in t: Transcript,
+                      edits: EditList = EditList(), rules: Rules = Rules()) -> [SubtitleCue] {
         var out: [SubtitleCue] = []
         var chunkWords: [TranscriptWord] = []
         var chunkChars = 0
@@ -61,12 +66,21 @@ public enum Subtitles {
         }
 
         for w in t.words[sentence.words] {
+            if isCutOut(w, in: edits) { continue }
             if chunkChars + w.text.count > rules.maxChars, !chunkWords.isEmpty { flush() }
             chunkWords.append(w)
             chunkChars += w.text.count
         }
         flush()
         return out
+    }
+
+    /// 词区间**完全**落入某个切口才剔除（只被 padding 擦边的词保留——宁可多留字）
+    static func isCutOut(_ word: TranscriptWord, in edits: EditList) -> Bool {
+        edits.cuts.contains {
+            CMTimeCompare($0.start, word.start) <= 0 &&
+                CMTimeCompare(word.end, $0.end) <= 0
+        }
     }
 
     /// 最短时长延展（不越过下一条）+ 小间隙无缝相接

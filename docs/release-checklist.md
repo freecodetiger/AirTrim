@@ -44,6 +44,15 @@ swift run -c release airtrim-spike burn \
 | A10 | 视觉冒烟 | `AIRTRIM_SNAPSHOT=<png> open build/AirTrim.app`：卡片/轨道/建议块/波形齐全 |
 | A11 | EditModel/Analyzer 单测 | `swift test`（含 EditList 换算往返、建议生命周期、PauseAnalyzer 参数缩放） |
 
+### A-M3（AI 建议：语气词 + 废话）
+
+| # | 项 | 命令/判据 |
+|---|---|---|
+| A12 | FillerAnalyzer 单测 | `swift test --filter FillerAnalyzerTests`：词表命中/句尾「啊」豁免/停顿合并取较长/minCutWorth 过滤/多字词孤立判定 |
+| A13 | verbosity 契约解析单测 | `swift test --filter Verbosity`：合法 JSON 解析、非法句编号丢弃、时间戳字段拒收、句表指纹失配作废、分块合并去重 |
+| A14 | verbosity 防线 | `swift test --filter EditSuggestionM3Tests`：verbosity 永不进 acceptAllProposed；M2 旧项目文件可解码 |
+| A15 | 字幕词级剔除单测 | `swift test --filter SubtitleWordCutTests`：被剪词出 cue、textOverride 句豁免、整句剪光无 cue |
+
 ## B. 人工验收（owner）
 
 - [ ] B1 冷启动恢复上次会话（秒开，不重转写）
@@ -57,6 +66,8 @@ swift run -c release airtrim-spike burn \
 - [ ] B9 一键紧凑耳测：成片无爆音、无吞字、停顿保留自然（听感不变量，cut-quality skill）
 - [ ] B10 建议审阅：跳听/接受/拒绝/⌘Z 整体回退；紧凑度滑杆重跑不打扰已拒绝项
 - [ ] B11 成片预览开关：播放头映射正确，卡片/轨道高亮跟随成片播放
+- [ ] B12 语气词耳测（koubo-01）：剪除后无双倍空洞、无吞字；字幕同步剔词；句尾语气助词未被误杀
+- [ ] B13 识别废话：无 Key 报错可行动；进行中可取消；无「全部接受」入口；接受后字幕 cue 同步消失，⌘Z 连字幕一起回退
 
 ## C. 已知素材缺口（不阻塞发版，但记录在案）
 

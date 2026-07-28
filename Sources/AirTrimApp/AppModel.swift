@@ -269,8 +269,11 @@ final class AppModel: ObservableObject {
     /// v1 缓存补挂派生音频数据：silences（M2 分析输入）+ 波形峰值。
     /// 后台补算一次并回写；期间编辑不受阻（建议延迟出现，设计 m2 §7）。
     private func backfillDerivedAudioIfNeeded(url: URL) {
-        guard let current = transcript,
-              current.silences.isEmpty || waveformPeaks == nil else { return }
+        guard let current = transcript else { return }
+        // 旧版 VAD 不分裂瞬态尖峰，会留下 peak>0.1 的段（新算法永远 ≤0.1）；
+        // 命中即重算，否则长静音里一声咀嘴会让整段被 maxSilencePeak 过滤掉
+        let staleVAD = current.silences.contains { $0.peakEnergy > 0.1 }
+        guard current.silences.isEmpty || staleVAD || waveformPeaks == nil else { return }
         Task {
             guard let pcm = try? await PCMExtractor.monoPCM(url: url) else { return }
             let (silences, peaks) = await Task.detached {
@@ -278,7 +281,7 @@ final class AppModel: ObservableObject {
                  WaveformPeaks.compute(samples: pcm))
             }.value
             guard self.sourceURL == url, let t = self.transcript else { return }
-            if t.silences.isEmpty { self.transcript = t.withSilences(silences) }
+            if t.silences.isEmpty || staleVAD { self.transcript = t.withSilences(silences) }
             if self.waveformPeaks == nil { self.waveformPeaks = peaks }
             if let updated = self.transcript {
                 ProjectStore.save(source: url, transcript: updated,
@@ -373,7 +376,8 @@ final class AppModel: ObservableObject {
 
     private func refreshDerived() {
         guard let transcript else { cachedCues = []; return }
-        cachedCues = Subtitles.cues(transcript: transcript, patch: session.current.patch)
+        cachedCues = Subtitles.cues(transcript: transcript, patch: session.current.patch,
+                                    edits: session.current.edits)
         // 每次修订即持久化（~100KB JSON，原子写）；关闭/崩溃零丢失
         if let sourceURL {
             ProjectStore.save(source: sourceURL, transcript: transcript, snapshot: session.current)
@@ -428,10 +432,126 @@ final class AppModel: ObservableObject {
         refreshDerived()
     }
 
-    /// 一键紧凑：全收 proposed（走 accept 路径，一次 undo 可整体回退）
+    /// 一键紧凑：全收 proposed（走 accept 路径，一次 undo 可整体回退）。
+    /// 收完自动切到成片预览——用户点「一键紧凑」就是想立刻听到结果，
+    /// 原片模式下播放器不跳剪辑段，会误以为没生效。
     func acceptAllPauses() {
         guard !proposedPauses.isEmpty else { return }
         session.apply { $0.acceptAllProposed(of: .pause) }
+        refreshDerived()
+        previewTightened = true
+    }
+
+    // MARK: - M3 AI 建议：清除语气词（本地）· 识别废话（LLM）
+
+    /// 上次语气词分析的命中数（nil = 未跑过；0 → 显示「未发现语气词」）
+    @Published private(set) var lastFillerRunFound: Int?
+    @Published private(set) var verbosityRunning = false
+    @Published var verbosityError: String?
+    /// 可选「视频主题」一句话输入（提升离题判定）
+    @Published var showVerbosityTopicPrompt = false
+    @Published var verbosityTopic = ""
+    private var verbosityTask: Task<Void, Never>?
+
+    var proposedFillers: [EditSuggestion] {
+        session.current.suggestions.filter { $0.state == .proposed && $0.kind == .filler }
+    }
+
+    var proposedVerbosity: [EditSuggestion] {
+        session.current.suggestions.filter { $0.state == .proposed && $0.kind == .verbosity }
+    }
+
+    /// 轨道绘制用：全部 proposed 建议（按 kind 着色）
+    var proposedSuggestions: [EditSuggestion] {
+        session.current.suggestions.filter { $0.state == .proposed }
+    }
+
+    /// 清除语气词：纯本地同步调用（<100ms，无进度条）；刷新不入 undo 栈
+    func runFillerAnalysis() {
+        guard let transcript, !transcript.silences.isEmpty else { return }
+        let fresh = FillerAnalyzer.suggest(
+            transcript: transcript,
+            effectiveSentences: session.current.patch.effectiveSentences(in: transcript),
+            silences: transcript.silences,
+            params: TightenParams(intensity: tightenIntensity))
+        lastFillerRunFound = fresh.count
+        session.refreshProposed(with: fresh, of: .filler)
+        refreshDerived()
+    }
+
+    /// 语气词可一键全收（与停顿同级置信；⌘Z 一步整体回退）。收完自动切成片预览（同一键紧凑）。
+    func acceptAllFillers() {
+        guard !proposedFillers.isEmpty else { return }
+        session.apply { $0.acceptAllProposed(of: .filler) }
+        refreshDerived()
+        previewTightened = true
+    }
+
+    /// 识别废话入口：先查配置（可行动报错，与 AI 断句同文案），再弹主题输入
+    func requestVerbosityAnalysis() {
+        guard !verbosityRunning else { return }
+        guard LLMConfig.isConfigured else {
+            verbosityError = LLMError.notConfigured.localizedDescription
+            return
+        }
+        showVerbosityTopicPrompt = true
+    }
+
+    /// 发起 LLM 废话识别（async，可取消）。发起时快照句表指纹，
+    /// 返回后由 VerbosityMapper 校验——期间拆/合句则整批作废提示重跑。
+    /// 建议只在成功返回后写入（中途崩溃/取消不留脏状态）。
+    func runVerbosityAnalysis() {
+        guard let transcript, !verbosityRunning else { return }
+        guard let config = LLMConfig.load() else {
+            verbosityError = LLMError.notConfigured.localizedDescription
+            return
+        }
+        let patch = session.current.patch
+        let sentences = patch.effectiveSentences(in: transcript)
+        let numbered = sentences.map { (id: $0.id, text: patch.text(for: $0, in: transcript)) }
+        let fingerprint = VerbosityMapper.fingerprint(of: sentences)
+        let topic = verbosityTopic.trimmingCharacters(in: .whitespacesAndNewlines)
+        let params = TightenParams(intensity: tightenIntensity)
+        verbosityRunning = true
+        verbosityTask = Task {
+            do {
+                let client = VerbosityClient(client: OpenAIChatClient(config: config))
+                let findings = try await client.analyze(sentences: numbered,
+                                                        topic: topic.isEmpty ? nil : topic)
+                guard !Task.isCancelled else { verbosityRunning = false; return }
+                let currentSentences = session.current.patch.effectiveSentences(in: transcript)
+                if let fresh = VerbosityMapper.suggestions(findings: findings,
+                                                           transcript: transcript,
+                                                           effectiveSentences: currentSentences,
+                                                           requestFingerprint: fingerprint,
+                                                           params: params) {
+                    session.refreshProposed(with: fresh, of: .verbosity)
+                    refreshDerived()
+                } else {
+                    verbosityError = "分析期间句子结构有改动，结果已作废——请重新识别。"
+                }
+            } catch is CancellationError {
+                // 用户取消：UI 复位，无半成品状态
+            } catch {
+                if !Task.isCancelled { verbosityError = error.localizedDescription }
+            }
+            verbosityRunning = false
+        }
+    }
+
+    func cancelVerbosityAnalysis() {
+        verbosityTask?.cancel()
+        verbosityTask = nil
+        verbosityRunning = false
+    }
+
+    /// 按类批量接受（一次 apply = 一步 undo）。
+    /// 没有全部一键收下的入口——verbosity 永不自动接受（D-M3-2，
+    /// 模型层 acceptAllProposed 也硬性拒绝）。
+    func acceptVerbosity(category: EditSuggestion.VerbosityCategory) {
+        let ids = proposedVerbosity.filter { $0.category == category }.map(\.id)
+        guard !ids.isEmpty else { return }
+        session.apply { snapshot in ids.forEach { snapshot.accept(suggestionID: $0) } }
         refreshDerived()
     }
 

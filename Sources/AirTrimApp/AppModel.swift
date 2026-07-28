@@ -389,6 +389,8 @@ final class AppModel: ObservableObject {
     // MARK: - 一键紧凑（M2）：分析 → 审阅 → 成片预览
 
     @Published var tightenIntensity: Double = 0.5
+    /// 门槛滑杆（秒）：只剪 ≥ 此时长的停顿；0.3 ≈ 旧版单滑杆行为
+    @Published var tightenMinGap: Double = 0.3
     @Published var previewTightened = false {
         didSet { if previewTightened != oldValue { refreshPlayerItem() } }
     }
@@ -415,7 +417,7 @@ final class AppModel: ObservableObject {
             transcript: transcript,
             effectiveSentences: session.current.patch.effectiveSentences(in: transcript),
             silences: transcript.silences,
-            params: TightenParams(intensity: tightenIntensity))
+            params: TightenParams(intensity: tightenIntensity, minGapSeconds: tightenMinGap))
         session.refreshProposed(with: fresh, of: .pause)
         refreshDerived()
     }
@@ -473,7 +475,7 @@ final class AppModel: ObservableObject {
             transcript: transcript,
             effectiveSentences: session.current.patch.effectiveSentences(in: transcript),
             silences: transcript.silences,
-            params: TightenParams(intensity: tightenIntensity))
+            params: TightenParams(intensity: tightenIntensity, minGapSeconds: tightenMinGap))
         lastFillerRunFound = fresh.count
         session.refreshProposed(with: fresh, of: .filler)
         refreshDerived()
@@ -511,7 +513,7 @@ final class AppModel: ObservableObject {
         let numbered = sentences.map { (id: $0.id, text: patch.text(for: $0, in: transcript)) }
         let fingerprint = VerbosityMapper.fingerprint(of: sentences)
         let topic = verbosityTopic.trimmingCharacters(in: .whitespacesAndNewlines)
-        let params = TightenParams(intensity: tightenIntensity)
+        let params = TightenParams(intensity: tightenIntensity, minGapSeconds: tightenMinGap)
         verbosityRunning = true
         verbosityTask = Task {
             do {

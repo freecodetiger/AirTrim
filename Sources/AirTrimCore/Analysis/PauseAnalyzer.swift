@@ -6,6 +6,8 @@ import Foundation
 public struct TightenParams: Sendable, Equatable {
     /// 0（松，句中留 150ms/句尾留 250ms）… 1（紧，双双收到下限 80ms）
     public var intensity: Double
+    /// 门槛滑杆：只剪 ≥ 此时长的停顿，短气口留给节奏（0.3s ≈ 现有行为下限）
+    public var minGap: CMTime
     /// 词边界外扩，绝不在元音中间切（40–60ms 区间取中）
     public var wordPadding = CMTime(value: 50, timescale: 1000)
     /// 切口净时长低于此值不出建议（剪了听不出，白增审阅负担）
@@ -13,8 +15,10 @@ public struct TightenParams: Sendable, Equatable {
     /// "静音"里峰值超过此线性幅度（≈ -20dBFS 瞬态）视为低语/杂音，跳过——宁可少剪
     public var maxSilencePeak: Float = 0.1
 
-    public init(intensity: Double = 0.5) {
+    public init(intensity: Double = 0.5, minGapSeconds: Double = 0.3) {
         self.intensity = min(max(intensity, 0), 1)
+        let ms = (min(max(minGapSeconds, 0), 10) * 1000).rounded()
+        self.minGap = CMTime(value: CMTimeValue(ms), timescale: 1000)
     }
 
     public var midSentenceKeep: CMTime { keep(nominalMs: 150) }
@@ -43,7 +47,7 @@ public enum PauseAnalyzer {
 
         // 开场空场：0 → 首词（无左词可 pad，切口从 0 起）
         let leadGap = CMTimeRange(start: .zero, end: words[0].start)
-        if isMostlySilent(leadGap, in: usable) {
+        if CMTimeCompare(leadGap.duration, params.minGap) >= 0, isMostlySilent(leadGap, in: usable) {
             let rightKeep = CMTimeMaximum(params.sentenceEndKeep, params.wordPadding)
             let cut = CMTimeRange(start: .zero, end: CMTimeSubtract(leadGap.end, rightKeep))
             if CMTimeCompare(cut.duration, params.minCutWorth) >= 0 {
@@ -54,7 +58,8 @@ public enum PauseAnalyzer {
         // 词间停顿
         for i in 0..<(words.count - 1) {
             let gap = CMTimeRange(start: words[i].end, end: words[i + 1].start)
-            guard CMTimeCompare(gap.duration, .zero) > 0, isMostlySilent(gap, in: usable) else { continue }
+            guard CMTimeCompare(gap.duration, params.minGap) >= 0,
+                  isMostlySilent(gap, in: usable) else { continue }
             let keep = sentenceStartWords.contains(i + 1)
                 ? params.sentenceEndKeep : params.midSentenceKeep
             // 保留的停顿分两侧：左侧 = 词边界 padding，右侧 = 其余（但不低于 padding）
@@ -69,7 +74,7 @@ public enum PauseAnalyzer {
         // 收尾空场：末词 → 源末尾（右边界贴源末，无右词可 pad）
         if let last = words.last {
             let tailGap = CMTimeRange(start: last.end, end: transcript.sourceDuration)
-            if CMTimeCompare(tailGap.duration, .zero) > 0, isMostlySilent(tailGap, in: usable) {
+            if CMTimeCompare(tailGap.duration, params.minGap) >= 0, isMostlySilent(tailGap, in: usable) {
                 let leftKeep = CMTimeMaximum(params.sentenceEndKeep, params.wordPadding)
                 let cut = CMTimeRange(start: CMTimeAdd(tailGap.start, leftKeep),
                                       end: tailGap.end)

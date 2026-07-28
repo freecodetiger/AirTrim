@@ -131,4 +131,24 @@ struct PauseAnalyzerTests {
         let mid = out.first { $0.originalGap.start == t(2500) }!
         #expect(mid.cut.end == t(3400))   // 3500 - (150-50)
     }
+
+    @Test func minGapThresholdFiltersShortPauses() {
+        // 门槛 0.7s：句中 600ms 停顿被挡，开场 900ms/句尾 1000ms/收尾 800ms 仍在
+        let out = PauseAnalyzer.suggest(transcript: transcript,
+                                        effectiveSentences: transcript.sentences,
+                                        silences: fullSilences,
+                                        params: TightenParams(intensity: 0, minGapSeconds: 0.7))
+        #expect(out.count == 3)
+        #expect(!out.contains { $0.originalGap.start == t(1400) })
+
+        // 门槛拉到 1.5s：全部停顿都不够长 → 只清长冷场的语义成立
+        let strict = PauseAnalyzer.suggest(transcript: transcript,
+                                           effectiveSentences: transcript.sentences,
+                                           silences: fullSilences,
+                                           params: TightenParams(intensity: 0, minGapSeconds: 1.5))
+        #expect(strict.isEmpty)
+
+        // 默认 0.3s ≈ 旧版行为：四处建议不变
+        #expect(TightenParams().minGap == t(300))
+    }
 }

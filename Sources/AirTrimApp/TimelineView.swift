@@ -216,19 +216,30 @@ func verbosityLabel(_ c: EditSuggestion.VerbosityCategory) -> String {
     }
 }
 
-/// 建议控制条：紧凑度滑杆 · 一键紧凑 · 清除语气词 · 识别废话 · 原片/成片切换
+/// 建议控制条：门槛+保留双滑杆 · 一键紧凑 · 清除语气词 · 识别废话 · 原片/成片切换
 struct TightenBar: View {
     @EnvironmentObject var model: AppModel
     @State private var showVerbosityPanel = false
 
     var body: some View {
         HStack(spacing: 10) {
-            Text("紧凑度").font(.callout)
-            Text("松").font(.caption2).foregroundStyle(.tertiary)
-            Slider(value: $model.tightenIntensity, in: 0...1) { editing in
+            // 滑杆1：剪哪些——只剪 ≥ X 秒的停顿（短气口留给节奏）
+            Text("门槛 ≥\(String(format: "%.1f", model.tightenMinGap))s")
+                .font(.callout).monospacedDigit()
+                .help("只剪不短于此时长的停顿；往右拉只清长冷场，保留短气口")
+            Slider(value: $model.tightenMinGap, in: 0.3...2.0, step: 0.1) { editing in
                 if !editing { model.rerunPauseAnalysis() }   // 松手才重跑，避免 undo/UI 抖动
             }
-            .frame(width: 150)
+            .frame(width: 110)
+
+            // 滑杆2：剪完留多少——停顿残留量（呼吸感）
+            Text("保留").font(.callout)
+                .help("剪完后每处停顿保留多少：松（句中150/句尾250ms）→ 紧（80ms）")
+            Text("松").font(.caption2).foregroundStyle(.tertiary)
+            Slider(value: $model.tightenIntensity, in: 0...1) { editing in
+                if !editing { model.rerunPauseAnalysis() }
+            }
+            .frame(width: 110)
             Text("紧").font(.caption2).foregroundStyle(.tertiary)
 
             Divider().frame(height: 16)

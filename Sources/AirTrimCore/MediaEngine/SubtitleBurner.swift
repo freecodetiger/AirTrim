@@ -4,15 +4,20 @@ import CoreText
 import Foundation
 import QuartzCore
 
-/// 字幕烧录样式 v1：白字黑边、底部居中、安全边距（设计 D4，固定一套；模板化留 roadmap）。
+/// 字幕烧录样式 v2：系统字体、半透明背景条、柔和描边（D4 演进）。
 public struct SubtitleStyle: Sendable {
-    /// 字号 = min(高 × heightRatio, 宽 × widthRatio)：横竖构图都保证每行 ≥16 个中文字，
-    /// 32 字上限的 cue（Subtitles.Rules.maxChars）最多折成 2 行（设计 D2）
     public var fontHeightRatio: CGFloat = 0.045
     public var fontWidthRatio: CGFloat = 0.05
     public var bottomMarginRatio: CGFloat = 0.07
     public var horizontalMarginRatio: CGFloat = 0.06
     public var fontName: String = "PingFangSC-Semibold"
+    /// 背景条：圆角 + 内边距 + 半透明黑底
+    public var backgroundOpacity: CGFloat = 0.55
+    public var backgroundCornerRadius: CGFloat = 6
+    public var backgroundPaddingV: CGFloat = 4
+    public var backgroundPaddingH: CGFloat = 12
+    /// 行间距（多行文本行距，单位 pt）
+    public var lineSpacing: CGFloat = 4
 
     public init() {}
 
@@ -125,54 +130,96 @@ public enum SubtitleBurner {
         return (renderSize, transform)
     }
 
-    /// 每条 cue 一个 CALayer，contents = CoreText 预渲染位图，opacity 动画控制显隐。
-    /// 不用 CATextLayer：它在离屏导出渲染器里不触发 display，出片无字（真机实测）。
-    /// macOS 层坐标原点在左下，y = 底部安全边距即贴底。
+    /// 每条 cue 产出两个子层：背景条（半透明黑底圆角矩形）+ 文字层（CoreText 位图）。
+    /// CoreText 不用 CATextLayer：离屏导出不触发 display，出片无字。
     static func overlayLayer(cues: [SubtitleCue], renderSize: CGSize, style: SubtitleStyle) -> CALayer {
         let overlay = CALayer()
         overlay.frame = CGRect(origin: .zero, size: renderSize)
         let fontSize = style.fontSize(for: renderSize)
-        let maxWidth = renderSize.width * (1 - 2 * style.horizontalMarginRatio)
+        let maxTextWidth = renderSize.width * (1 - 2 * style.horizontalMarginRatio)
         let bottomMargin = renderSize.height * style.bottomMarginRatio
 
         for cue in cues {
-            guard let image = cueImage(cue.text, fontSize: fontSize,
-                                       fontName: style.fontName, maxWidth: maxWidth) else { continue }
-            let size = CGSize(width: image.width, height: image.height)
-            let layer = CALayer()
-            layer.contents = image
-            layer.contentsScale = 1
-            layer.frame = CGRect(x: (renderSize.width - size.width) / 2, y: bottomMargin,
-                                 width: size.width, height: size.height)
-            layer.shadowColor = CGColor(gray: 0, alpha: 1)
-            layer.shadowOpacity = 0.55
-            layer.shadowRadius = fontSize * 0.05
-            layer.shadowOffset = .zero
-            layer.opacity = 0
-            layer.add(visibilityAnimation(cue: cue), forKey: "cue")
-            overlay.addSublayer(layer)
+            guard let textImage = cueImage(cue.text, fontSize: fontSize,
+                                           fontName: style.fontName,
+                                           maxWidth: maxTextWidth,
+                                           lineSpacing: style.lineSpacing) else { continue }
+            let textSize = CGSize(width: textImage.width, height: textImage.height)
+
+            // 背景条：文字尺寸 + 内边距，圆角，半透明黑底
+            let bgW = textSize.width + 2 * style.backgroundPaddingH
+            let bgH = textSize.height + 2 * style.backgroundPaddingV
+            let bgLayer = CAShapeLayer()
+            bgLayer.path = CGPath(roundedRect: CGRect(x: 0, y: 0, width: bgW, height: bgH),
+                                  cornerWidth: style.backgroundCornerRadius,
+                                  cornerHeight: style.backgroundCornerRadius, transform: nil)
+            bgLayer.fillColor = CGColor(gray: 0, alpha: style.backgroundOpacity)
+            bgLayer.frame = CGRect(x: (renderSize.width - bgW) / 2, y: bottomMargin,
+                                   width: bgW, height: bgH)
+            bgLayer.opacity = 0
+            bgLayer.add(visibilityAnimation(cue: cue), forKey: "cue")
+            overlay.addSublayer(bgLayer)
+
+            // 文字层：居中叠在背景条上
+            let textLayer = CALayer()
+            textLayer.contents = textImage
+            textLayer.contentsScale = 1
+            textLayer.frame = CGRect(x: (renderSize.width - textSize.width) / 2,
+                                     y: bottomMargin + style.backgroundPaddingV,
+                                     width: textSize.width, height: textSize.height)
+            textLayer.opacity = 0
+            textLayer.add(visibilityAnimation(cue: cue), forKey: "cue")
+            overlay.addSublayer(textLayer)
         }
         return overlay
     }
 
-    /// CoreText → CGImage：宽度固定为可用宽度（水平居中由段落样式完成），
-    /// 高度按排版实际结果 + 描边余量
+    /// CoreText → CGImage：宽度固定，高度按排版结果 + 阴影余量
     static func cueImage(_ text: String, fontSize: CGFloat, fontName: String,
-                         maxWidth: CGFloat) -> CGImage? {
-        let attributed = attributedText(text, fontSize: fontSize, fontName: fontName)
+                         maxWidth: CGFloat, lineSpacing: CGFloat = 4) -> CGImage? {
+        let attributed = attributedText(text, fontSize: fontSize, fontName: fontName,
+                                        lineSpacing: lineSpacing)
         let framesetter = CTFramesetterCreateWithAttributedString(attributed)
-        let pad = ceil(fontSize * 0.2)
-        let textWidth = maxWidth - 2 * pad
+        let shadowPad = ceil(fontSize * 0.15)
+        let textWidth = maxWidth
         let fitted = CTFramesetterSuggestFrameSizeWithConstraints(
             framesetter, CFRange(location: 0, length: 0), nil,
             CGSize(width: textWidth, height: .greatestFiniteMagnitude), nil)
+        let totalW = Int(ceil(maxWidth + 2 * shadowPad))
+        let totalH = Int(ceil(fitted.height) + 2 * shadowPad)
         guard fitted.height > 0,
               let context = CGContext(
-                  data: nil, width: Int(ceil(maxWidth)), height: Int(ceil(fitted.height) + 2 * pad),
+                  data: nil, width: totalW, height: totalH,
                   bitsPerComponent: 8, bytesPerRow: 0,
                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
                   bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
-        let box = CGPath(rect: CGRect(x: pad, y: pad, width: textWidth, height: ceil(fitted.height)),
+
+        // 先画阴影（略微偏移的模糊黑字）
+        let shadowContext = CGContext(
+            data: nil, width: totalW, height: totalH,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        if let shadowCtx = shadowContext {
+            let shadowAttr = attributedText(text, fontSize: fontSize, fontName: fontName,
+                                            color: CGColor(gray: 0, alpha: 0.65),
+                                            lineSpacing: lineSpacing)
+            let shadowSetter = CTFramesetterCreateWithAttributedString(shadowAttr)
+            let shadowBox = CGPath(rect: CGRect(x: shadowPad + 1, y: shadowPad - 1,
+                                                width: textWidth, height: ceil(fitted.height)),
+                                   transform: nil)
+            CTFrameDraw(CTFramesetterCreateFrame(shadowSetter, CFRange(location: 0, length: 0),
+                                                 shadowBox, nil), shadowCtx)
+            if let shadowImg = shadowCtx.makeImage() {
+                context.setShadow(offset: .zero, blur: fontSize * 0.25,
+                                  color: CGColor(gray: 0, alpha: 0.5))
+                context.draw(shadowImg, in: CGRect(x: 0, y: 0, width: totalW, height: totalH))
+            }
+        }
+
+        // 再画主文字
+        let box = CGPath(rect: CGRect(x: shadowPad, y: shadowPad,
+                                      width: textWidth, height: ceil(fitted.height)),
                          transform: nil)
         CTFrameDraw(CTFramesetterCreateFrame(framesetter, CFRange(location: 0, length: 0), box, nil),
                     context)
@@ -194,19 +241,24 @@ public enum SubtitleBurner {
         return animation
     }
 
-    static func attributedText(_ text: String, fontSize: CGFloat, fontName: String) -> NSAttributedString {
+    static func attributedText(_ text: String, fontSize: CGFloat, fontName: String,
+                               color: CGColor = CGColor(gray: 1, alpha: 1),
+                               lineSpacing: CGFloat = 4) -> NSAttributedString {
         let font = CTFontCreateWithName(fontName as CFString, fontSize, nil)
-        let paragraph: CTParagraphStyle = withUnsafeBytes(of: CTTextAlignment.center) { buffer in
-            var setting = CTParagraphStyleSetting(
-                spec: .alignment, valueSize: buffer.count, value: buffer.baseAddress!)
-            return CTParagraphStyleCreate(&setting, 1)
-        }
+        var alignment = CTTextAlignment.center
+        var lineSp = lineSpacing
+        var settings: [CTParagraphStyleSetting] = [
+            CTParagraphStyleSetting(spec: .alignment, valueSize: MemoryLayout<CTTextAlignment>.size,
+                                    value: &alignment),
+            CTParagraphStyleSetting(spec: .lineSpacingAdjustment, valueSize: MemoryLayout<CGFloat>.size,
+                                    value: &lineSp),
+        ]
+        let paragraph = CTParagraphStyleCreate(&settings, settings.count)
         return NSAttributedString(string: text, attributes: [
             NSAttributedString.Key(kCTFontAttributeName as String): font,
-            NSAttributedString.Key(kCTForegroundColorAttributeName as String): CGColor(gray: 1, alpha: 1),
-            // 负值 = 描边 + 填充（白字黑边）；单位是字号的百分比
-            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): -4.0,
-            NSAttributedString.Key(kCTStrokeColorAttributeName as String): CGColor(gray: 0, alpha: 1),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,
+            NSAttributedString.Key(kCTStrokeWidthAttributeName as String): -2.5,
+            NSAttributedString.Key(kCTStrokeColorAttributeName as String): CGColor(gray: 0, alpha: 0.35),
             NSAttributedString.Key(kCTParagraphStyleAttributeName as String): paragraph,
         ])
     }

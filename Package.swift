@@ -55,6 +55,12 @@ let package = Package(
             dependencies: ["AirTrimCore"],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // App 层纯 I/O 逻辑测试（ProjectStore 扫描/删除；项目列表不归 Core）
+        .testTarget(
+            name: "AirTrimAppTests",
+            dependencies: ["AirTrimApp"],
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         .testTarget(
             name: "AirTrimSpikeTests",
             dependencies: ["AirTrimSpikeKit"],

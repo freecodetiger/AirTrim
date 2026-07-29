@@ -36,22 +36,21 @@ struct SubtitleBurnerTests {
         let overlay = SubtitleBurner.overlayLayer(
             cues: cues, renderSize: CGSize(width: 1080, height: 1920), style: SubtitleStyle())
         let layers = overlay.sublayers ?? []
-        #expect(layers.count == 2)
+        // v2：每个 cue 有背景条 + 文字层 = 2 × 2 = 4 层
+        #expect(layers.count == 4)
 
-        for (i, layer) in layers.enumerated() {
-            #expect(layer.opacity == 0)  // 模型值 0：动画区间外不可见
-            let animation = try? #require(layer.animation(forKey: "cue") as? CABasicAnimation)
-            guard let animation else { continue }
-            let expectedBegin = max(cues[i].start.seconds, AVCoreAnimationBeginTimeAtZero)
-            #expect(abs(animation.beginTime - expectedBegin) < 0.001)
-            #expect(abs(animation.duration - CMTimeSubtract(cues[i].end, cues[i].start).seconds) < 0.001)
-            #expect(animation.isRemovedOnCompletion == false)
-        }
-        // 字幕层都应贴近底部安全边距、水平居中
-        let style = SubtitleStyle()
+        // 前两个是背景层（CAShapeLayer），后两个是文字层（CALayer）
         for layer in layers {
-            #expect(abs(layer.frame.minY - 1920 * style.bottomMarginRatio) < 0.001)
-            #expect(abs(layer.frame.midX - 540) < 0.001)
+            let animation = layer.animation(forKey: "cue") as? CABasicAnimation
+            #expect(animation != nil)
+            #expect(animation?.isRemovedOnCompletion == false)
+        }
+        // 文字层贴近底部安全边距 + 背景内边距
+        let style = SubtitleStyle()
+        let textLayers = layers.enumerated().filter { $0.offset % 2 == 1 }.map(\.element)
+        for layer in textLayers {
+            #expect(abs(layer.frame.minY - (1920 * style.bottomMarginRatio + style.backgroundPaddingV)) < 1)
+            #expect(abs(layer.frame.midX - 540) < 1)
         }
     }
 

@@ -31,9 +31,13 @@ public struct TightenParams: Sendable, Equatable {
     }
 }
 
-/// 停顿分析（Analysis · 纯函数）：VAD 真静音 × ASR 词间隙交叉验证出建议。
-/// 词间隙单独不算数（ASR 在静音段会漂移，speech-pipeline skill）；
+/// 停顿分析（Analysis · 纯函数）。
 /// 切口在此处就定形（含 padding 与最小停顿保留，设计 D-M2-1），accept 原样入 EditList。
+///
+/// M4 修订：两层间隙策略——
+/// 1. **句子卡片间隙**（ASR 句子边界）：不依赖 VAD，句子切分本身就是停顿信号
+/// 2. **句内词间隙**：需 VAD ≥30% 验证，确认是真静音而非自然语速慢
+/// 两层都产出 pause 类 suggestion，统一经 TightenBar 审阅。
 public enum PauseAnalyzer {
     public static func suggest(transcript: Transcript,
                                effectiveSentences: [TranscriptSentence],
@@ -42,12 +46,14 @@ public enum PauseAnalyzer {
         let words = transcript.words
         guard !words.isEmpty else { return [] }
         let usable = silences.filter { $0.peakEnergy <= params.maxSilencePeak }
-        let sentenceStartWords = Set(effectiveSentences.map(\.words.lowerBound))
+        let sorted = effectiveSentences.sorted { $0.words.lowerBound < $1.words.lowerBound }
+        let sentenceStartIndices = Set(sorted.map(\.words.lowerBound))
         var out: [EditSuggestion] = []
 
-        // 开场空场：0 → 首词（无左词可 pad，切口从 0 起）
+        // ── 开场空场（VAD 验证：无句子边界可参照） ──
         let leadGap = CMTimeRange(start: .zero, end: words[0].start)
-        if CMTimeCompare(leadGap.duration, params.minGap) >= 0, isMostlySilent(leadGap, in: usable) {
+        if CMTimeCompare(leadGap.duration, params.minGap) >= 0,
+           isMostlySilent(leadGap, in: usable) {
             let rightKeep = CMTimeMaximum(params.sentenceEndKeep, params.wordPadding)
             let cut = CMTimeRange(start: .zero, end: CMTimeSubtract(leadGap.end, rightKeep))
             if CMTimeCompare(cut.duration, params.minCutWorth) >= 0 {
@@ -55,29 +61,41 @@ public enum PauseAnalyzer {
             }
         }
 
-        // 词间停顿
-        for i in 0..<(words.count - 1) {
-            let gap = CMTimeRange(start: words[i].end, end: words[i + 1].start)
-            guard CMTimeCompare(gap.duration, params.minGap) >= 0,
-                  isMostlySilent(gap, in: usable) else { continue }
-            let keep = sentenceStartWords.contains(i + 1)
-                ? params.sentenceEndKeep : params.midSentenceKeep
-            // 保留的停顿分两侧：左侧 = 词边界 padding，右侧 = 其余（但不低于 padding）
-            let leftKeep = params.wordPadding
-            let rightKeep = CMTimeMaximum(CMTimeSubtract(keep, leftKeep), params.wordPadding)
-            let cut = CMTimeRange(start: CMTimeAdd(gap.start, leftKeep),
-                                  end: CMTimeSubtract(gap.end, rightKeep))
-            guard CMTimeCompare(cut.duration, params.minCutWorth) >= 0 else { continue }
-            out.append(EditSuggestion(kind: .pause, cut: cut, originalGap: gap))
+        // ── 句子卡片间隙（无需 VAD；ASR 句子切分即停顿信号） ──
+        for i in 0..<(sorted.count - 1) {
+            let a = sorted[i], b = sorted[i + 1]
+            guard let ra = transcript.sentenceRange(a),
+                  let rb = transcript.sentenceRange(b) else { continue }
+            let gap = CMTimeRange(start: ra.end, end: rb.start)
+            guard CMTimeCompare(gap.duration, params.minGap) >= 0 else { continue }
+            if let cut = cutInside(gap, leftKeep: params.wordPadding,
+                                   rightKeep: params.sentenceEndKeep,
+                                   params: params, usable: usable) {
+                out.append(EditSuggestion(kind: .pause, cut: cut, originalGap: gap))
+            }
         }
 
-        // 收尾空场：末词 → 源末尾（右边界贴源末，无右词可 pad）
+        // ── 句内词间隙（VAD ≥30% 验证，确认不是语速慢；句界处跳过避免重复） ──
+        for i in 0..<(words.count - 1) where !sentenceStartIndices.contains(i + 1) {
+            let gap = CMTimeRange(start: words[i].end, end: words[i + 1].start)
+            guard CMTimeCompare(gap.duration, params.minGap) >= 0,
+                  hasSomeSilence(gap, in: usable) else { continue }
+            let leftKeep = params.wordPadding
+            let rightKeep = CMTimeMaximum(
+                CMTimeSubtract(params.midSentenceKeep, leftKeep), params.wordPadding)
+            if let cut = cutInside(gap, leftKeep: leftKeep, rightKeep: rightKeep,
+                                   params: params, usable: usable) {
+                out.append(EditSuggestion(kind: .pause, cut: cut, originalGap: gap))
+            }
+        }
+
+        // ── 收尾空场（VAD 验证：无句子边界可参照） ──
         if let last = words.last {
             let tailGap = CMTimeRange(start: last.end, end: transcript.sourceDuration)
-            if CMTimeCompare(tailGap.duration, params.minGap) >= 0, isMostlySilent(tailGap, in: usable) {
+            if CMTimeCompare(tailGap.duration, params.minGap) >= 0,
+               isMostlySilent(tailGap, in: usable) {
                 let leftKeep = CMTimeMaximum(params.sentenceEndKeep, params.wordPadding)
-                let cut = CMTimeRange(start: CMTimeAdd(tailGap.start, leftKeep),
-                                      end: tailGap.end)
+                let cut = CMTimeRange(start: CMTimeAdd(tailGap.start, leftKeep), end: tailGap.end)
                 if CMTimeCompare(cut.duration, params.minCutWorth) >= 0 {
                     out.append(EditSuggestion(kind: .pause, cut: cut, originalGap: tailGap))
                 }
@@ -86,16 +104,56 @@ public enum PauseAnalyzer {
         return out
     }
 
-    /// VAD 交叉验证：静音覆盖 gap 的 ≥60%（比例判定用整数倍乘，不出 Double）
-    static func isMostlySilent(_ gap: CMTimeRange, in silences: [SilenceInterval]) -> Bool {
-        guard CMTimeCompare(gap.duration, .zero) > 0 else { return false }
+    /// 在 gap 内成形切口：左右保留 padding → 中间切掉；VAD 用于收紧边界
+    private static func cutInside(_ gap: CMTimeRange,
+                                  leftKeep: CMTime, rightKeep: CMTime,
+                                  params: TightenParams,
+                                  usable: [SilenceInterval]) -> CMTimeRange? {
+        var cutStart = CMTimeAdd(gap.start, leftKeep)
+        var cutEnd = CMTimeSubtract(gap.end, rightKeep)
+
+        if let best = bestSilence(overlapping: gap, in: usable) {
+            if CMTimeCompare(best.start, cutStart) > 0 { cutStart = best.start }
+            if CMTimeCompare(best.end, cutEnd) < 0   { cutEnd   = best.end }
+        }
+
+        guard CMTimeCompare(cutEnd, cutStart) > 0 else { return nil }
+        let cut = CMTimeRange(start: cutStart, end: cutEnd)
+        guard CMTimeCompare(cut.duration, params.minCutWorth) >= 0 else { return nil }
+        return cut
+    }
+
+    /// 找 gap 内重叠最长的静音段（VAD 边界精修）
+    private static func bestSilence(overlapping gap: CMTimeRange,
+                                    in silences: [SilenceInterval]) -> SilenceInterval? {
+        silences.compactMap { s -> (SilenceInterval, CMTime)? in
+            let o = CMTimeRangeGetIntersection(
+                gap, otherRange: CMTimeRange(start: s.start, end: s.end))
+            return CMTimeCompare(o.duration, .zero) > 0 ? (s, o.duration) : nil
+        }.max { CMTimeCompare($0.1, $1.1) < 0 }?.0
+    }
+
+    /// VAD ≥60%：开场/收尾 + FillerAnalyzer 共用
+    public static func isMostlySilent(_ gap: CMTimeRange,
+                                      in silences: [SilenceInterval]) -> Bool {
+        coveredRatio(gap, in: silences) >= 0.6
+    }
+
+    /// VAD ≥30%：句内词间隙的松散验证——确认是真停顿而非语速变化
+    private static func hasSomeSilence(_ gap: CMTimeRange,
+                                       in silences: [SilenceInterval]) -> Bool {
+        coveredRatio(gap, in: silences) >= 0.3
+    }
+
+    private static func coveredRatio(_ gap: CMTimeRange,
+                                     in silences: [SilenceInterval]) -> Double {
+        guard CMTimeCompare(gap.duration, .zero) > 0 else { return 0 }
         var covered = CMTime.zero
         for s in silences {
             let overlap = CMTimeRangeGetIntersection(
                 gap, otherRange: CMTimeRange(start: s.start, end: s.end))
             covered = CMTimeAdd(covered, overlap.duration)
         }
-        return CMTimeCompare(CMTimeMultiply(covered, multiplier: 10),
-                             CMTimeMultiply(gap.duration, multiplier: 6)) >= 0
+        return covered.seconds / gap.duration.seconds
     }
 }

@@ -238,13 +238,9 @@ struct VoiceModelSettingsView: View {
             Button("删除", role: .destructive) {
                 if let target = modelToDelete {
                     if target.directory == model.modelFolder {
-                        // 删除的是活跃模型
                         model.deleteModel()
                     } else {
-                        // 删除非活跃的外部模型
-                        if target.isManaged {
-                            try? FileManager.default.removeItem(at: target.directory)
-                        }
+                        try? FileManager.default.removeItem(at: target.directory)
                         model.refreshInstalledModels()
                     }
                 }
@@ -252,11 +248,14 @@ struct VoiceModelSettingsView: View {
             Button("取消", role: .cancel) {}
         } message: {
             if let target = modelToDelete {
-                if target.directory == model.modelFolder {
-                    Text("「\(target.name)」是当前正在使用的模型。\n删除后将无法转写，需重新下载或选择本地模型。\n将删除约 \(target.formattedSize) 的模型文件。")
-                } else {
-                    Text("将删除「\(target.name)」的模型文件（约 \(target.formattedSize)）。")
-                }
+                let activeNote = target.directory == model.modelFolder
+                    ? "「\(target.name)」是当前正在使用的模型。\n删除后将无法转写，需重新下载或选择本地模型。\n"
+                    : ""
+                let sizeNote = "将删除约 \(target.formattedSize) 的模型文件。"
+                let locationNote = target.isManaged
+                    ? ""
+                    : "\n模型位于自管目录之外：\(target.directory.path)"
+                Text(activeNote + sizeNote + locationNote)
             }
         }
         // 切换活跃模型确认
@@ -284,6 +283,23 @@ struct VoiceModelSettingsView: View {
     private var installedModelsSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("已安装的模型").font(.headline)
+
+            // 活跃模型损坏警告（P0 提示）
+            if let active = model.installedModels.first(where: {
+                $0.directory.resolvingSymlinksInPath().path
+                    == model.modelFolder?.resolvingSymlinksInPath().path
+            }), let valid = active.isValid, !valid {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                    Text("当前模型文件不完整，转写将失败。请重新下载或删除后重新获取。")
+                        .font(.callout)
+                }
+                .padding(10)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.orange.opacity(0.1))
+                .cornerRadius(8)
+            }
 
             if model.installedModels.isEmpty {
                 HStack(spacing: 4) {
@@ -316,13 +332,19 @@ struct VoiceModelSettingsView: View {
     private func installedModelCard(_ installed: InstalledModel) -> some View {
         let isActive = installed.directory.resolvingSymlinksInPath().path
             == model.modelFolder?.resolvingSymlinksInPath().path
+        let isBroken = installed.isValid.map { !$0 } ?? false
 
         VStack(alignment: .leading, spacing: 6) {
             HStack {
                 if isActive {
-                    Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    Image(systemName: isBroken
+                        ? "exclamationmark.circle.fill"
+                        : "checkmark.circle.fill")
+                        .foregroundStyle(isBroken ? .orange : .green)
                     Text(installed.name).font(.callout).bold()
-                    Text("· 使用中").font(.caption).foregroundStyle(.green)
+                    Text(isBroken ? "· 不完整" : "· 使用中")
+                        .font(.caption)
+                        .foregroundStyle(isBroken ? .orange : .green)
                 } else {
                     Image(systemName: "circle").foregroundStyle(.secondary)
                     Text(installed.name).font(.callout)
@@ -359,10 +381,19 @@ struct VoiceModelSettingsView: View {
                 }
 
                 if installed.isManaged {
-                    Button("校验修复…") {
-                        model.repairModel()
+                    if isBroken {
+                        Button("重新下载") {
+                            model.repairModel()
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.small)
+                        .disabled(model.installProgress != nil)
+                    } else {
+                        Button("校验修复…") {
+                            model.repairModel()
+                        }
+                        .disabled(model.installProgress != nil)
                     }
-                    .disabled(model.installProgress != nil)
                 }
 
                 Button("删除…", role: .destructive) {
@@ -372,7 +403,13 @@ struct VoiceModelSettingsView: View {
             }
         }
         .padding(10)
-        .background(.background.secondary.opacity(0.5))
+        .background(isBroken && isActive
+            ? Color.orange.opacity(0.06)
+            : Color(nsColor: .controlBackgroundColor).opacity(0.5))
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .strokeBorder(isBroken && isActive ? Color.orange.opacity(0.3) : .clear, lineWidth: 1)
+        )
         .cornerRadius(8)
     }
 

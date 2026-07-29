@@ -55,6 +55,15 @@ public struct EditSession: Sendable, Equatable {
             }
             suggestions = kept + additions
         }
+
+        /// 重置某类建议的全部记录（含 accepted/rejected），并移除已应用的剪辑区间。
+        /// 用于参数驱动重分析（如紧凑度滑杆），让用户在新参数下重新决策。
+        public mutating func resetKind(_ kind: EditSuggestion.Kind) {
+            for s in suggestions where s.kind == kind && s.state == .accepted {
+                edits.remove(overlapping: s.cut)
+            }
+            suggestions.removeAll { $0.kind == kind }
+        }
     }
 
     public private(set) var current: Snapshot

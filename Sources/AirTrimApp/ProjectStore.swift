@@ -16,6 +16,19 @@ struct ProjectDocument: Codable {
     var waveformPeaks: [Float]?
 }
 
+/// 项目管理页列表项（M4）：从缓存 JSON 解出的只读元数据快照。
+struct ProjectMetadata: Identifiable {
+    let fingerprint: String     // 即文件名主干，也是 id
+    let sourcePath: String
+    let fileName: String        // sourcePath 末段（列表主标题）
+    let savedAt: Date           // 最后编辑时间（排序键，倒序）
+    let projectSizeBytes: Int64 // 缓存 JSON 大小
+    let sourceExists: Bool      // 源文件还在不在（灰态标记）
+
+    var id: String { fingerprint }
+    var sourceURL: URL { URL(fileURLWithPath: sourcePath) }
+}
+
 enum ProjectStore {
     static var dir: URL {
         FileManager.default
@@ -76,6 +89,37 @@ enum ProjectStore {
         if let fp = fingerprint(of: source) {
             try? FileManager.default.removeItem(at: fileURL(fingerprint: fp))
         }
+    }
+
+    /// 扫描 Projects/ 目录取全部项目元数据，按最后编辑时间倒序（M4 设计 D-M4-2）。
+    /// v1 容忍全量解码（几十项 × ~100KB 毫秒级）；坏文件跳过、目录不存在返回空——绝不崩溃。
+    /// directory 参数仅供测试注入，产品代码走默认值。
+    static func listAllProjects(in directory: URL = dir) -> [ProjectMetadata] {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey]) else { return [] }
+        return entries
+            .filter { $0.pathExtension == "json" }
+            .compactMap { url -> ProjectMetadata? in
+                guard let data = try? Data(contentsOf: url),
+                      let doc = try? JSONDecoder().decode(ProjectDocument.self, from: data)
+                else { return nil }   // 解码失败跳过不入列表
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? data.count
+                return ProjectMetadata(
+                    fingerprint: url.deletingPathExtension().lastPathComponent,
+                    sourcePath: doc.sourcePath,
+                    fileName: (doc.sourcePath as NSString).lastPathComponent,
+                    savedAt: doc.savedAt,
+                    projectSizeBytes: Int64(size),
+                    sourceExists: fm.fileExists(atPath: doc.sourcePath))
+            }
+            .sorted { $0.savedAt > $1.savedAt }
+    }
+
+    /// 删除单个项目缓存 JSON（源文件永远不动）。directory 参数仅供测试注入。
+    static func deleteProject(fingerprint: String, in directory: URL = dir) {
+        try? FileManager.default.removeItem(
+            at: directory.appendingPathComponent("\(fingerprint).json"))
     }
 
     /// 上次打开且缓存仍有效的源文件。

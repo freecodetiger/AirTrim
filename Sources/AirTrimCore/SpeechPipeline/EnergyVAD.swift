@@ -8,8 +8,8 @@ public enum EnergyVAD {
         samples: [Float],
         sampleRate: Int32,
         frameDuration: Double = 0.02,
-        marginDB: Double = 10,
-        minDuration: Double = 0.5,
+        marginDB: Double = 8,
+        minDuration: Double = 0.3,
         spikePeak: Float = 0.1
     ) -> [SilenceInterval] {
         let frameLen = max(1, Int(frameDuration * Double(sampleRate)))

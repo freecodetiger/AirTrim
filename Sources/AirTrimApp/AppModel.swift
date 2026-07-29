@@ -34,6 +34,9 @@ final class AppModel: ObservableObject {
     @Published private(set) var currentSentenceStart: Int?
     @Published private(set) var currentCueText: String?
     @Published private(set) var isPlaying = false
+    @Published private(set) var isScrubbing = false
+    /// 跳听 / seek 时指定时间轴应滚动到的源秒位置（nil = 不滚动）
+    @Published var navigateTimelineTo: Double?
     /// 时间轴/卡片联动的选中句（UI 状态，非剪辑状态）
     @Published var selectedSentenceStart: Int?
     /// 播放头在源时间轴上的显示值（秒，仅供 UI 绘制）
@@ -133,14 +136,46 @@ final class AppModel: ObservableObject {
     init() {
         modelFolder = Self.discoverModel()
         if modelFolder == nil { stage = .needsModel }
-        // 冒烟/回归钩子：AIRTRIM_AUTOLOAD=<视频路径> 启动即转写直达编辑器
+        loadProjects()
+        // 空格键全局监听：无论焦点在哪个视图（AVPlayerView / TextField / 轨道），
+        // 空格一律触发播放/暂停。仅当 NSTextView 正在编辑时放行（打字需要空格）。
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self else { return event }
+            // 空格键：播放/暂停（编辑中放行）
+            if event.keyCode == 49 {
+                if let fr = NSApp.keyWindow?.firstResponder as? NSTextView,
+                   fr.isEditable { return event }
+                self.togglePlayback()
+                return nil
+            }
+            // Delete / Backspace：删选中句子（编辑中放行给 TextField）
+            if event.keyCode == 51 || event.keyCode == 117 {
+                if let fr = NSApp.keyWindow?.firstResponder as? NSTextView,
+                   fr.isEditable { return event }
+                if self.selectedSentenceStart != nil {
+                    self.deleteSelectedSentence()
+                    return nil
+                }
+            }
+            return event
+        }
+        // 模型存在但不完整时自动续传（断点续传跳过已完成的文件）
+        if modelFolder != nil {
+            Task { @MainActor in
+                let installer = ModelInstaller(manifest: .largeV3, destination: Self.appSupportModels)
+                let (_, todo) = await installer.plan()
+                if !todo.isEmpty {
+                    repairModel()
+                }
+            }
+        }
+        // 冒烟/回归钩子：AIRTRIM_AUTOLOAD=<视频路径> 启动即转写直达编辑器（不走首屏）
         if let auto = ProcessInfo.processInfo.environment["AIRTRIM_AUTOLOAD"],
            modelFolder != nil {
             start(url: URL(fileURLWithPath: auto))
-        } else if let last = ProjectStore.lastOpenedURL() {
-            // 恢复上次会话（缓存命中秒开；不满足条件则停在导入页）
-            start(url: last)
         }
+        // M4 起不再自动恢复上次项目（D-M4-1）：首屏是项目管理页，
+        // 上次项目降级为「继续上次」置顶卡片（lastProjectURL）
         // 视觉冒烟钩子：AIRTRIM_SNAPSHOT=<png路径> 启动 8s 后窗口自截图
         // （应用截自己的窗口无需屏幕录制权限；release 回归清单用）
         if let snapshotPath = ProcessInfo.processInfo.environment["AIRTRIM_SNAPSHOT"] {
@@ -345,6 +380,22 @@ final class AppModel: ObservableObject {
         refreshDerived()
     }
 
+    /// 手动删句：把整句时间区间加入 EditList（走 undo，⌘Z 可回退）
+    func deleteSentence(_ s: TranscriptSentence) {
+        guard let transcript, let range = transcript.sentenceRange(s) else { return }
+        session.apply { $0.edits.add(CMTimeRange(start: range.start, end: range.end)) }
+        selectedSentenceStart = nil
+        refreshDerived()
+    }
+
+    /// 删当前选中的句子
+    func deleteSelectedSentence() {
+        guard let start = selectedSentenceStart,
+              let transcript,
+              let s = transcript.sentences.first(where: { $0.words.lowerBound == start }) else { return }
+        deleteSentence(s)
+    }
+
     func undo() {
         if session.undo() { refreshDerived() }
     }
@@ -410,9 +461,10 @@ final class AppModel: ObservableObject {
     var removedSeconds: Double { session.current.edits.removedDuration.seconds }
 
     /// 重跑停顿分析（紧凑度滑杆松手 / 进入编辑器 / silences 补算完成时）。
-    /// proposed 刷新不入 undo 栈；rejected/accepted 由 EditSession 保护不被打扰。
+    /// 参数变化时重置旧决策，让用户在新参数下重新评估所有停顿。
     func rerunPauseAnalysis() {
         guard let transcript, !transcript.silences.isEmpty else { return }
+        session.apply { $0.resetKind(.pause) }
         let fresh = PauseAnalyzer.suggest(
             transcript: transcript,
             effectiveSentences: session.current.patch.effectiveSentences(in: transcript),
@@ -557,10 +609,114 @@ final class AppModel: ObservableObject {
         refreshDerived()
     }
 
-    /// 跳听：只应用这一个切口的拼接结果，切点前后各 1.5s（cut-quality 审阅原则）
+    // MARK: - AI 字幕纠错
+
+    @Published var correctionRunning = false
+    @Published var correctionError: String?
+    @Published var correctionDiffs: [(sentence: TranscriptSentence, original: String, corrected: String)] = []
+    @Published var showCorrectionReview = false
+
+    func requestTranscriptCorrection() {
+        guard let transcript, !correctionRunning else { return }
+        guard LLMConfig.isConfigured else {
+            correctionError = LLMError.notConfigured.localizedDescription
+            return
+        }
+        correctionRunning = true
+        correctionError = nil
+        let sentences = transcript.sentences
+        Task {
+            do {
+                let config = LLMConfig.load()!
+                let corrector = TranscriptCorrector(client: OpenAIChatClient(config: config))
+                let corrections = try await corrector.correct(transcript: transcript)
+                await MainActor.run {
+                    self.correctionDiffs = sentences.compactMap { s in
+                        guard let corrected = corrections[s.id],
+                              corrected != transcript.sentenceText(s) else { return nil }
+                        return (s, transcript.sentenceText(s), corrected)
+                    }
+                    self.showCorrectionReview = !self.correctionDiffs.isEmpty
+                    self.correctionRunning = false
+                    if self.correctionDiffs.isEmpty {
+                        self.correctionError = nil  // 没有错误也是一种成功
+                    }
+                }
+            } catch {
+                await MainActor.run {
+                    self.correctionError = error.localizedDescription
+                    self.correctionRunning = false
+                }
+            }
+        }
+    }
+
+    func applyCorrections(_ diffs: [(sentence: TranscriptSentence, original: String, corrected: String)]) {
+        guard transcript != nil else { return }
+        session.apply { snapshot in
+            for (sentence, original, corrected) in diffs {
+                snapshot.patch.overrideText(
+                    sentenceStartingAt: sentence.words.lowerBound,
+                    original: original, text: corrected)
+            }
+        }
+        correctionDiffs = []
+        showCorrectionReview = false
+        refreshDerived()
+    }
+
+    // MARK: - AI 社交媒体文案（标题 + 配文 + 标签）
+
+    @Published var socialCopyRunning = false
+    @Published var socialCopyError: String?
+    @Published var socialCopyResult: String?
+    @Published var showSocialPanel = false
+
+    func requestSocialCopy() {
+        guard let transcript, !socialCopyRunning else { return }
+        guard LLMConfig.isConfigured else {
+            socialCopyError = LLMError.notConfigured.localizedDescription
+            return
+        }
+        socialCopyRunning = true
+        socialCopyError = nil
+        // 只取剪辑后保留的有效句子
+        let effectiveText = session.current.patch
+            .effectiveSentences(in: transcript)
+            .map { transcript.sentenceText($0) }
+            .joined(separator: "\n")
+        guard !effectiveText.isEmpty else {
+            socialCopyError = "没有有效字幕内容"
+            socialCopyRunning = false
+            return
+        }
+        Task {
+            do {
+                let config = LLMConfig.load()!
+                let writer = SocialCopywriter(client: OpenAIChatClient(config: config))
+                let result = try await writer.generate(from: effectiveText)
+                await MainActor.run {
+                    self.socialCopyResult = result
+                    self.showSocialPanel = true
+                    self.socialCopyRunning = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.socialCopyError = error.localizedDescription
+                    self.socialCopyRunning = false
+                }
+            }
+        }
+    }
+
+    /// 跳听：只应用这一个切口的拼接结果，切点前后各 1.5s（cut-quality 审阅原则）。
+    /// 同时把时间轴定位到建议位置，方便看上下文。
     func audition(suggestionID id: UUID) {
         guard let sourceURL, let player,
               let suggestion = session.current.suggestions.first(where: { $0.id == id }) else { return }
+        // 先定位时间轴（切换 player item 前）
+        currentSourceSeconds = suggestion.originalGap.start.seconds
+        navigateTimelineTo = suggestion.originalGap.start.seconds
         var solo = EditList()
         solo.add(suggestion.cut)
         Task {
@@ -605,18 +761,35 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 时间轴 scrub（输入是 UI 像素换算出的源轴秒）
+    /// 时间轴 scrub（输入是 UI 像素换算出的源轴秒）。
+    /// 拖动中暂停播放 + 屏蔽 playbackTick，避免异步 seek 未完成时旧时间覆写位置。
     func scrub(toSourceSeconds seconds: Double) {
+        if !isScrubbing {
+            wasPlayingBeforeScrub = isPlaying
+            player?.pause()
+        }
+        isScrubbing = true
         stopAt = nil
-        seekPlayer(toSource: CMTime(seconds: max(0, seconds), preferredTimescale: 600))
-    }
-
-    private func seekPlayer(toSource t: CMTime) {
+        NSApp.keyWindow?.makeFirstResponder(nil)   // 轨道交互时解除字幕编辑焦点
+        let t = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
         lastSourceTime = t
         currentSourceSeconds = t.seconds
         let target = previewTightened ? session.current.edits.outputTime(forSource: t) : t
         player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero)
     }
+
+    /// 松手后保持 isScrubbing 一小段时间（等 seak 落地 + 排空残留回调），
+    /// 然后恢复播放状态。不再重复 seek——scrub() 已设置位置。
+    func endScrub() {
+        let resume = wasPlayingBeforeScrub
+        Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 150_000_000) // 150ms
+            isScrubbing = false
+            if resume { player?.play() }
+        }
+    }
+
+    private var wasPlayingBeforeScrub = false
 
     func retranscribe() {
         guard let sourceURL else { return }
@@ -635,9 +808,23 @@ final class AppModel: ObservableObject {
         currentSentenceStart = nil
         currentCueText = nil
         stage = .idle
+        loadProjects()   // 回项目页：刚保存的项目按 savedAt 自然置顶（D-M4-4）
     }
 
     var lastProjectURL: URL? { ProjectStore.lastOpenedURL() }
+
+    // MARK: - 项目管理页（M4）：列表状态归 AppModel，Store 只管 I/O（D-M4-3）
+
+    @Published private(set) var projects: [ProjectMetadata] = []
+
+    func loadProjects() {
+        projects = ProjectStore.listAllProjects()
+    }
+
+    func deleteProjectCache(fingerprint: String) {
+        ProjectStore.deleteProject(fingerprint: fingerprint)
+        loadProjects()
+    }
 
     // MARK: - 模型管理（设置窗口）
 
@@ -687,13 +874,10 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// 删除应用自管目录下的模型文件（约 3.1 GB），外部模型目录仅解除引用。
+    /// 删除模型文件并重新扫描可用模型。自管 / 外部目录均删除。
     func deleteModel() {
         guard let folder = modelFolder else { return }
-        let managedRoot = Self.appSupportModels.resolvingSymlinksInPath().path
-        if folder.resolvingSymlinksInPath().path.hasPrefix(managedRoot) {
-            try? FileManager.default.removeItem(at: folder)
-        }
+        try? FileManager.default.removeItem(at: folder)
         modelFolder = Self.discoverModel()
         refreshInstalledModels()
         if modelFolder == nil && transcript == nil { stage = .needsModel }
@@ -719,6 +903,8 @@ final class AppModel: ObservableObject {
             self.stopAt = nil
             if auditioning { refreshPlayerItem(); return }   // 跳听结束回到正常预览
         }
+        // 用户拖动时间轴时，播放回调不覆写位置（已由 scrub 设置）
+        guard !isScrubbing else { return }
         guard let transcript, !auditioning else { return }
         // item 时间轴 → 源时间轴（成片模式经 EditList 映射；唯一真相仍是 EditList）
         let sourceT = previewTightened
@@ -740,12 +926,24 @@ final class AppModel: ObservableObject {
     func seek(to s: TranscriptSentence) {
         guard let transcript, let range = transcript.sentenceRange(s) else { return }
         stopAt = nil
-        seekPlayer(toSource: range.start)
+        player?.pause()
+        isScrubbing = true
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        currentSourceSeconds = range.start.seconds
+        navigateTimelineTo = range.start.seconds
+        lastSourceTime = range.start
+        let target = previewTightened ? session.current.edits.outputTime(forSource: range.start) : range.start
+        player?.seek(to: target, toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.isScrubbing = false }
+        }
     }
 
     /// 试听整句：句首播到句尾自动停（stopAt 存 item 轴，成片模式先映射）
     func playSentence(_ s: TranscriptSentence) {
         guard let transcript, let range = transcript.sentenceRange(s) else { return }
+        NSApp.keyWindow?.makeFirstResponder(nil)
+        currentSourceSeconds = range.start.seconds
+        navigateTimelineTo = range.start.seconds
         let edits = session.current.edits
         stopAt = previewTightened ? edits.outputTime(forSource: range.end) : range.end
         lastSourceTime = range.start
@@ -758,7 +956,11 @@ final class AppModel: ObservableObject {
     func togglePlayback() {
         guard let player else { return }
         stopAt = nil
-        player.rate == 0 ? player.play() : player.pause()
+        if player.rate == 0 {
+            player.play()
+        } else {
+            player.pause()
+        }
     }
 
     // MARK: - 导出
@@ -796,6 +998,29 @@ final class AppModel: ObservableObject {
 
     func cancelBurn() {
         burnTask?.cancel()
+    }
+
+    /// 导出无字幕视频：仅应用剪辑，不烧录字幕
+    func exportVideo() {
+        guard let sourceURL, transcript != nil, burnProgress == nil else { return }
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.mpeg4Movie]
+        panel.nameFieldStringValue = sourceURL.deletingPathExtension().lastPathComponent + "-剪辑.mp4"
+        guard panel.runModal() == .OK, let outputURL = panel.url else { return }
+        burnProgress = 0
+        let edits = session.current.edits
+        burnTask = Task {
+            do {
+                try await SubtitleBurner.burn(source: sourceURL, cues: [], to: outputURL,
+                                              edits: edits) { fraction in
+                    Task { @MainActor [weak self] in self?.burnProgress = fraction }
+                }
+                NSWorkspace.shared.activateFileViewerSelecting([outputURL])
+            } catch is CancellationError { }
+            catch { self.exportError = error.localizedDescription }
+            self.burnProgress = nil
+            self.burnTask = nil
+        }
     }
 
     func exportSRT() {

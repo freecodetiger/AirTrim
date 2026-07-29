@@ -4,12 +4,12 @@ import SwiftUI
 
 /// 底部轨道（设计 m2 §5）：标尺 + 波形背景 + 字幕块 + 停顿建议/切割区间 + 播放头。
 /// 全部内容从 Transcript/EditSession/cues 派生绘制，自身不持有任何时间状态。
+///
+/// 播放与轨道各走各路：播放头随时间移动，但 ScrollView 不自动追（避免手势冲突）。
+/// zoom > 1 时点「追」按钮手动定位到播放头。
 struct TrackAreaView: View {
     @EnvironmentObject var model: AppModel
-    /// 1 = 整段适配窗宽；>1 放大（横向滚动）
     @State private var zoom: CGFloat = 1
-    /// 拖动 scrub 中：挂起播放跟随滚动，否则内容会在手指下被拽走
-    @State private var scrubbing = false
 
     private var durationSeconds: Double {
         max(model.transcript?.sourceDuration.seconds ?? 0, 0.001)
@@ -23,10 +23,13 @@ struct TrackAreaView: View {
                         track(width: max(geo.size.width * zoom, geo.size.width))
                             .id("track")
                     }
-                    .onChange(of: model.currentSourceSeconds) { _, seconds in
-                        guard model.isPlaying, zoom > 1, !scrubbing else { return }
-                        // 跟随播放：把播放头维持在可视区中部
-                        proxy.scrollTo("playhead", anchor: .center)
+                    // 跳听 / 试听句 / seek 时定位到对应位置（延迟一帧等布局落定）
+                    .onChange(of: model.navigateTimelineTo) { _, target in
+                        guard target != nil else { return }
+                        DispatchQueue.main.async {
+                            proxy.scrollTo("playhead", anchor: .center)
+                            model.navigateTimelineTo = nil
+                        }
                     }
                 }
             }
@@ -40,6 +43,16 @@ struct TrackAreaView: View {
             Image(systemName: "minus.magnifyingglass").foregroundStyle(.secondary)
             Slider(value: $zoom, in: 1...20).frame(width: 140)
             Image(systemName: "plus.magnifyingglass").foregroundStyle(.secondary)
+            // 放大时提供手动"追播放头"按钮
+            if zoom > 1 {
+                Button {
+                    model.scrub(toSourceSeconds: model.currentSourceSeconds)
+                } label: {
+                    Image(systemName: "location.fill")
+                        .font(.caption)
+                }
+                .help("定位到播放头")
+            }
             Spacer()
             Text(timecode(model.currentSourceSeconds) + " / " + timecode(durationSeconds))
                 .font(.system(.caption, design: .monospaced))
@@ -61,10 +74,10 @@ struct TrackAreaView: View {
         }
         .frame(width: width, height: 118)
         .contentShape(Rectangle())
-        .gesture(
+        .highPriorityGesture(
             DragGesture(minimumDistance: 0)
-                .onChanged { scrubbing = true; model.scrub(toSourceSeconds: $0.location.x / pps) }
-                .onEnded { _ in scrubbing = false }
+                .onChanged { model.scrub(toSourceSeconds: $0.location.x / pps) }
+                .onEnded { _ in model.endScrub() }
         )
     }
 
@@ -275,6 +288,38 @@ struct TightenBar: View {
 
             Divider().frame(height: 16)
 
+            // AI 字幕纠错（LLM，异步；结果需审阅确认）
+            if model.correctionRunning {
+                ProgressView().controlSize(.small)
+                Text("纠错中…").font(.caption).foregroundStyle(.secondary)
+            } else {
+                Button("AI 纠错") { model.requestTranscriptCorrection() }
+                    .help("LLM 逐句纠正同音字、错别字、专有名词（只上传文字，结果需审阅）")
+            }
+            if model.showCorrectionReview {
+                Button("\(model.correctionDiffs.count) 处修正 · 审阅") { model.showCorrectionReview = true }
+                    .popover(isPresented: $model.showCorrectionReview) { CorrectionReviewPanel() }
+                    .foregroundStyle(.green)
+            }
+
+            Divider().frame(height: 16)
+
+            // AI 抖音文案（标题 + 配文 + 标签，结果显示在右侧边栏）
+            if model.socialCopyRunning {
+                ProgressView().controlSize(.small)
+                Button("取消") { /* 暂不支持取消 */ }
+                    .disabled(true)
+            } else {
+                Button("抖音文案") { model.requestSocialCopy() }
+                    .help("AI 分析字幕生成标题、配文和标签（只上传文字稿，结果在右侧边栏）")
+            }
+            if model.socialCopyResult != nil {
+                Button("查看文案") { model.showSocialPanel = true }
+                    .foregroundStyle(.pink)
+            }
+
+            Divider().frame(height: 16)
+
             // 识别废话（LLM，异步可取消；建议永不自动接受）
             if model.verbosityRunning {
                 ProgressView().controlSize(.small)
@@ -454,5 +499,51 @@ struct SuggestionReviewPopover: View {
         }
         .padding(14)
         .frame(width: 300)
+    }
+}
+
+/// AI 纠错审阅面板：逐条展示原文 vs 修正，确认后写入（走 undo）
+struct CorrectionReviewPanel: View {
+    @EnvironmentObject var model: AppModel
+    @State private var confirmed = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("AI 字幕纠错 · \(model.correctionDiffs.count) 处建议修正").font(.headline)
+                Text("逐条比对，确认后写入字幕（⌘Z 可撤销）")
+                    .font(.caption).foregroundStyle(.secondary)
+
+                ForEach(model.correctionDiffs.indices, id: \.self) { idx in
+                    let diff = model.correctionDiffs[idx]
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "text.badge.minus")
+                                .foregroundStyle(.red).font(.caption)
+                            Text(diff.original)
+                                .font(.caption).strikethrough().foregroundStyle(.red)
+                        }
+                        HStack(spacing: 4) {
+                            Image(systemName: "text.badge.plus")
+                                .foregroundStyle(.green).font(.caption)
+                            Text(diff.corrected)
+                                .font(.caption).foregroundStyle(.green)
+                        }
+                    }
+                    .padding(6)
+                    .background(RoundedRectangle(cornerRadius: 4).fill(.background.secondary.opacity(0.5)))
+                }
+
+                HStack {
+                    Button("全部应用") {
+                        model.applyCorrections(model.correctionDiffs)
+                    }
+                    .keyboardShortcut(.defaultAction)
+                    Button("取消") { model.correctionDiffs = []; model.showCorrectionReview = false }
+                }
+            }
+            .padding(14)
+        }
+        .frame(width: 400, height: 380)
     }
 }

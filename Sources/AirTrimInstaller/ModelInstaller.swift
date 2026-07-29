@@ -64,10 +64,10 @@ public struct ModelManifest: Sendable {
             files: model.map { .init(path: $0.0, remotePath: "\(m)/\($0.0)", size: $0.1) }
                 + tokenizer.map { .init(path: "tokenizer/\($0.0)", remotePath: $0.0, size: $0.1) },
             sources: [
-                (URL(string: "https://huggingface.co/argmaxinc/whisperkit-coreml/resolve/main")!,
-                 URL(string: "https://huggingface.co/openai/whisper-large-v3/resolve/main")!),
                 (URL(string: "https://hf-mirror.com/argmaxinc/whisperkit-coreml/resolve/main")!,
                  URL(string: "https://hf-mirror.com/openai/whisper-large-v3/resolve/main")!),
+                (URL(string: "https://huggingface.co/argmaxinc/whisperkit-coreml/resolve/main")!,
+                 URL(string: "https://huggingface.co/openai/whisper-large-v3/resolve/main")!),
             ]
         )
     }()

@@ -80,11 +80,21 @@ struct SubtitleCard: View {
                 .buttonStyle(.plain)
                 .foregroundStyle(.secondary)
                 .help("试听整句（句尾自动停）")
+                Button {
+                    model.deleteSentence(sentence)
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("删除此句（⌘Z 可撤销）")
                 Menu {
                     Button("拆分此句…") { showSplitPicker = true }
                         .disabled(sentence.words.count < 2)
                     Button("与上一句合并") { model.mergeWithPrevious(sentence) }
                         .disabled(sentence.words.lowerBound == 0)
+                    Divider()
+                    Button("删除此句") { model.deleteSentence(sentence) }
                 } label: {
                     Image(systemName: "ellipsis.circle")
                 }
@@ -121,10 +131,14 @@ struct SubtitleCard: View {
             model.selectedSentenceStart = sentence.words.lowerBound
         }
         .contextMenu {
+            Button("试听整句") { model.playSentence(sentence) }
+            Divider()
             Button("拆分此句…") { showSplitPicker = true }
                 .disabled(sentence.words.count < 2)
             Button("与上一句合并") { model.mergeWithPrevious(sentence) }
                 .disabled(sentence.words.lowerBound == 0)
+            Divider()
+            Button("删除此句") { model.deleteSentence(sentence) }
         }
         .popover(isPresented: $showSplitPicker) {
             SplitPicker(sentence: sentence)

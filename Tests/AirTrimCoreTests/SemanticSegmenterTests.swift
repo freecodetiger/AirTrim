@@ -118,4 +118,36 @@ struct SegmentAlignTests {
                                               lines: ["然后吃晚饭"])
         #expect(s3 == [0])
     }
+
+    /// NFKC 归一化：LLM 将全角标点转为半角，不应触发 textMismatch
+    @Test func nfkcNormalizationToleratesFullwidthToHalfwidth() throws {
+        let words = ["今天", "天气", "真好", "!", "走吧"]
+        // LLM 返回时将全角 ！ 转成了半角 !——NFKC 归一化应消除此差异
+        // 词偏移: 今天(0) 天气(2) 真好(4) !(6) 走吧(7)
+        // LLM 行: "今天天气"(len=4→word2) "真好!"(len=3→offset=7→word4)
+        let starts = try SemanticSegmenter.align(
+            wordTexts: words,
+            lines: ["今天天气", "真好!", "走吧"])
+        #expect(starts == [0, 2, 4])
+    }
+
+    /// NFKC 归一化：全角数字被 LLM 转半角，应容忍
+    @Test func nfkcNormalizationToleratesCompatForms() throws {
+        // 全角 ３ (U+FF13) NFKC→ "3" (U+0033)
+        let starts = try SemanticSegmenter.align(
+            wordTexts: ["价格", "３", "元"],
+            lines: ["价格", "3元"])  // LLM 把全角 ３ 转成了半角 3
+        #expect(starts == [0, 1])
+    }
+
+    /// 模拟全半角混合场景：中文引号、逗号被 LLM 转换
+    @Test func mixedFullwidthPunctuationTolerated() throws {
+        // 原文含全角中文标点
+        let words = ["他说", "＂", "你好", "＂", "然后", "走了"]
+        // LLM 返回时把全角 ＂＂ 转成了半角 ""
+        let starts = try SemanticSegmenter.align(
+            wordTexts: words,
+            lines: ["他说\"你好\"", "然后走了"])
+        #expect(starts == [0, 4])
+    }
 }

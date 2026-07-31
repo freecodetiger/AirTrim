@@ -72,8 +72,9 @@ public struct SegmentationResult: Sendable {
 ///
 /// 长视频策略：按句分块（默认 ~25 句/块），每块独立发 LLM。
 /// - 短文本（≤25 句）走单请求快路径
-/// - 任一块 LLM 改动文字 → 该块退回原始断句，其余块正常
-/// - 通过 `onChunkComplete` 回调逐块报告进度
+/// - Unicode NFKC 归一化消除全半角/繁简异体差异
+/// - 失败自动用更严厉 prompt 重试一次
+/// - 仍失败则回退到原始断句，其余块正常
 /// - 失败块可通过 `retryChunk` 精确重试
 public struct SemanticSegmenter: Sendable {
     public let client: OpenAIChatClient
@@ -86,10 +87,44 @@ public struct SemanticSegmenter: Sendable {
         self.chunkSize = max(1, chunkSize)
     }
 
+    // MARK: - Prompts
+
+    /// 标准 prompt：简洁指令，适用于大多数情况。
     static let systemPrompt = """
     你是字幕断句引擎。把用户提供的口播转写文本按语义断成适合字幕的短句。
-    规则：每句一行；必须完整保留原文的每一个字符，不得增删、修改或重排；
-    不得添加标点、序号或任何解释；只输出断行后的文本。
+
+    规则：
+    - 每句一行。
+    - 原文的每一个字、每一个标点、每一个空格都必须原样保留，不得增删改。
+    - 不得添加任何新标点、序号、说明文字。
+    - 只输出断行后的文本，不要任何前缀后缀。
+
+    示例 —
+    原文：今天我们来聊聊AI它真的很强大
+    输出：
+    今天我们来聊聊AI
+    它真的很强大
+
+    原文：第一点呢就是说我们要注意安全第二点就是效率问题
+    输出：
+    第一点呢就是说我们要注意安全
+    第二点就是效率问题
+    """
+
+    /// 重试 prompt：更严厉，显式列出禁止行为。用于标准 prompt 失败后的第二次尝试。
+    static let retryPrompt = """
+    你是严格的字幕断句引擎。你的唯一任务是在原文中插入换行，使文本按语义断成适合字幕的短句。
+
+    铁律——违反任何一条则整批作废：
+    1. 逐字保留原文。不得增删改任何一个字、标点、空格。
+    2. 不得将全角标点转为半角（如「，」不得变成「,」）。
+    3. 不得合并或拆分原文中的空格。
+    4. 不得纠正原文中的"错别字"或语法——那不是你的职责。
+    5. 不得添加、删除或改动省略号（……）、破折号（——）等特殊标点。
+    6. 每句一行。不添加序号、前缀、后缀、说明。
+    7. 如果原文已经是合理的短句，就原样输出。
+
+    记住：你只做一件事——在合适的位置插入换行符。其他一切不变。
     """
 
     // MARK: - 公共 API
@@ -115,8 +150,7 @@ public struct SemanticSegmenter: Sendable {
         return try await chunkedRequestsWithResult(for: transcript, onChunkComplete: onChunkComplete)
     }
 
-    /// 重试单个失败的块。传入上次结果的 `chunkIndex`。
-    /// 返回新的 ChunkResult 可直接替换到 `SegmentationResult` 中。
+    /// 重试单个失败的块。内部已含自动重试（标准 prompt → 严厉 prompt）。
     public func retryChunk(
         for transcript: Transcript,
         chunkIndex: Int,
@@ -129,26 +163,10 @@ public struct SemanticSegmenter: Sendable {
         let words = transcript.words
         let chunkWords = Array(words[chunk.wordRange])
 
-        do {
-            let fullText = chunkWords.map(\.text).joined()
-            let reply = try await client.complete(system: Self.systemPrompt, user: fullText)
-            let localStarts = try Self.align(
-                wordTexts: chunkWords.map(\.text),
-                lines: reply.split(separator: "\n").map(String.init))
-            return ChunkResult(
-                sentenceRange: chunk.sentenceRange,
-                wordRange: chunk.wordRange,
-                succeeded: true,
-                localStarts: localStarts,
-                errorDescription: nil)
-        } catch {
-            return ChunkResult(
-                sentenceRange: chunk.sentenceRange,
-                wordRange: chunk.wordRange,
-                succeeded: false,
-                localStarts: nil,
-                errorDescription: error.localizedDescription)
-        }
+        return try await processChunk(
+            wordTexts: chunkWords.map(\.text),
+            sentenceRange: chunk.sentenceRange,
+            wordRange: chunk.wordRange)
     }
 
     /// 将重试后的块合并回完整结果。
@@ -161,7 +179,6 @@ public struct SemanticSegmenter: Sendable {
         var newChunks = result.chunks
         newChunks[chunkIndex] = newChunk
 
-        // 重新合并：成功块用 LLM 结果，失败块用原始断句
         let sentences = transcript.sentences
         var allStarts: Set<Int> = [0]
         for chunk in newChunks {
@@ -189,20 +206,23 @@ public struct SemanticSegmenter: Sendable {
         let wordRange = 0..<words.count
 
         do {
-            let fullText = words.map(\.text).joined()
-            let reply = try await client.complete(system: Self.systemPrompt, user: fullText)
-            let starts = try Self.align(wordTexts: words.map(\.text),
-                                        lines: reply.split(separator: "\n").map(String.init))
-            let chunk = ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
-                                    succeeded: true, localStarts: starts, errorDescription: nil)
-            onChunkComplete?(1, 1, true)
-            return SegmentationResult(sentenceStarts: starts, chunks: [chunk])
+            let chunk = try await processChunk(
+                wordTexts: words.map(\.text),
+                sentenceRange: sentenceRange,
+                wordRange: wordRange)
+            onChunkComplete?(1, 1, chunk.succeeded)
+            if chunk.succeeded, let starts = chunk.localStarts {
+                return SegmentationResult(sentenceStarts: starts, chunks: [chunk])
+            } else {
+                return SegmentationResult(
+                    sentenceStarts: transcript.sentences.map(\.words.lowerBound),
+                    chunks: [chunk])
+            }
         } catch {
             let chunk = ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
                                     succeeded: false, localStarts: nil,
                                     errorDescription: error.localizedDescription)
             onChunkComplete?(1, 1, false)
-            // 单块失败 → 回退到原始断句
             return SegmentationResult(
                 sentenceStarts: transcript.sentences.map(\.words.lowerBound),
                 chunks: [chunk])
@@ -231,23 +251,16 @@ public struct SemanticSegmenter: Sendable {
             let chunkWords = Array(words[wordRange])
             let chunkIndex = chunks.count
 
-            let chunkResult: ChunkResult
-            do {
-                let fullText = chunkWords.map(\.text).joined()
-                let reply = try await client.complete(system: Self.systemPrompt, user: fullText)
-                let localStarts = try Self.align(
-                    wordTexts: chunkWords.map(\.text),
-                    lines: reply.split(separator: "\n").map(String.init))
-                chunkResult = ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
-                                          succeeded: true, localStarts: localStarts,
-                                          errorDescription: nil)
-                for s in localStarts.dropFirst() {
+            let chunkResult = try await processChunk(
+                wordTexts: chunkWords.map(\.text),
+                sentenceRange: sentenceRange,
+                wordRange: wordRange)
+
+            if chunkResult.succeeded, let starts = chunkResult.localStarts {
+                for s in starts.dropFirst() {
                     allStarts.insert(wordRange.lowerBound + s)
                 }
-            } catch {
-                chunkResult = ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
-                                          succeeded: false, localStarts: nil,
-                                          errorDescription: error.localizedDescription)
+            } else {
                 for s in chunkSentences.dropFirst() {
                     allStarts.insert(s.words.lowerBound)
                 }
@@ -258,7 +271,6 @@ public struct SemanticSegmenter: Sendable {
             chunkStart = chunkEnd
         }
 
-        // 所有块都失败 → 抛出最后一个块的错误
         let allFailed = chunks.allSatisfy { !$0.succeeded }
         if allFailed {
             let firstError = chunks.compactMap(\.errorDescription).first ?? "未知错误"
@@ -268,31 +280,78 @@ public struct SemanticSegmenter: Sendable {
         return SegmentationResult(sentenceStarts: allStarts.sorted(), chunks: chunks)
     }
 
+    // MARK: - 核心：单块处理（含自动重试）
+
+    /// 处理一个文本块：标准 prompt → 失败则用严厉 prompt 重试 → 仍失败则返回失败结果。
+    private func processChunk(
+        wordTexts: [String],
+        sentenceRange: Range<Int>,
+        wordRange: Range<Int>
+    ) async throws -> ChunkResult {
+        let fullText = wordTexts.joined()
+
+        // 第一次尝试：标准 prompt
+        do {
+            let reply = try await client.complete(system: Self.systemPrompt, user: fullText)
+            let starts = try Self.align(
+                wordTexts: wordTexts,
+                lines: reply.split(separator: "\n").map(String.init))
+            return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
+                               succeeded: true, localStarts: starts, errorDescription: nil)
+        } catch LLMError.textMismatch {
+            // 第二次尝试：严厉 prompt
+            do {
+                let reply2 = try await client.complete(system: Self.retryPrompt, user: fullText)
+                let starts2 = try Self.align(
+                    wordTexts: wordTexts,
+                    lines: reply2.split(separator: "\n").map(String.init))
+                return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
+                                   succeeded: true, localStarts: starts2, errorDescription: nil)
+            } catch {
+                return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
+                                   succeeded: false, localStarts: nil,
+                                   errorDescription: error.localizedDescription)
+            }
+        } catch {
+            return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
+                               succeeded: false, localStarts: nil,
+                               errorDescription: error.localizedDescription)
+        }
+    }
+
     // MARK: - 对齐校验
 
     /// 把 LLM 的分行文本对齐回词序列，返回句起点词下标。
+    ///
+    /// 比对前做 **NFKC 归一化**（`precomposedStringWithCompatibilityMapping`），
+    /// 消除全角/半角、繁简异体、连字等 Unicode 表示差异。LLM 常见的静默改动
+    /// （如 `，`→`,`、`＂`→`"`、`ﬁ`→`fi`）不再导致误判 `textMismatch`。
+    ///
     /// - 去除全部空白后逐字比对，任何不一致 → `LLMError.textMismatch`
     /// - 行边界若落在词中间（LLM 在词内断行），该断点丢弃（保守策略）
     static func align(wordTexts: [String], lines: [String]) throws -> [Int] {
-        let normalizedLines = lines
+        // NFKC 归一化：消除全半角、繁简异体等 Unicode 表示差异
+        let normWords = wordTexts.map { $0.precomposedStringWithCompatibilityMapping }
+        let normLines = lines
+            .map { $0.precomposedStringWithCompatibilityMapping }
             .map { $0.filter { !$0.isWhitespace } }
             .filter { !$0.isEmpty }
-        let joinedWords = wordTexts.joined()
-        guard normalizedLines.joined() == joinedWords else {
+        let joinedWords = normWords.joined()
+        guard normLines.joined() == joinedWords else {
             throw LLMError.textMismatch
         }
 
-        // 词起点的字符偏移表
+        // 词起点的字符偏移表（基于归一化后的词文本）
         var wordStartAtOffset: [Int: Int] = [:]   // 字符偏移 → 词下标
         var offset = 0
-        for (i, w) in wordTexts.enumerated() {
+        for (i, w) in normWords.enumerated() {
             wordStartAtOffset[offset] = i
             offset += w.count
         }
 
         var starts: [Int] = [0]
         var lineOffset = 0
-        for line in normalizedLines.dropLast() {
+        for line in normLines.dropLast() {
             lineOffset += line.count
             if let wordIndex = wordStartAtOffset[lineOffset] {
                 starts.append(wordIndex)

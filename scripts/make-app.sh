@@ -5,6 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONF="${1:-release}"
+VERSION="${2:-0.1.0}"
 swift build -c "$CONF" --product AirTrimApp
 
 APP=build/AirTrim.app
@@ -31,7 +32,7 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDisplayName</key>      <string>AirTrim</string>
     <key>CFBundlePackageType</key>      <string>APPL</string>
     <key>CFBundleIconFile</key>         <string>AppIcon</string>
-    <key>CFBundleShortVersionString</key><string>0.1.0</string>
+    <key>CFBundleShortVersionString</key><string>0.0.0</string>
     <key>CFBundleVersion</key>          <string>1</string>
     <key>LSMinimumSystemVersion</key>   <string>14.0</string>
     <key>NSHighResolutionCapable</key>  <true/>
@@ -39,7 +40,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 </dict>
 </plist>
 PLIST
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
 
 # 本地 ad-hoc 签名（发布版换 Developer ID + notarize）
 codesign --force --deep --sign - "$APP"
-echo "✅ $APP（open build/AirTrim.app 启动）"
+echo "✅ ${APP} (open build/AirTrim.app 启动)"

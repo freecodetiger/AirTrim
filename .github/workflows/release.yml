@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  release:
+    runs-on: macos-15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build (release)
+        run: swift build -c release --product AirTrimApp
+
+      - name: Run tests
+        run: swift test
+
+      - name: Architecture check
+        run: scripts/check-architecture.sh
+
+      - name: Extract version
+        id: version
+        run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Bundle .app
+        run: scripts/make-app.sh release "${{ steps.version.outputs.value }}"
+
+      - name: Create DMG
+        run: scripts/make-dmg.sh "${{ steps.version.outputs.value }}"
+
+      - name: Upload DMG to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: build/AirTrim-${{ steps.version.outputs.value }}.dmg
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

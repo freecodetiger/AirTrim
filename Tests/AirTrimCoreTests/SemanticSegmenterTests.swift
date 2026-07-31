@@ -51,8 +51,9 @@ struct SegmentAlignTests {
                                end: .init(value: .init($0.offset * 10 + 9), timescale: 30))
             },
             sentences: [], sourceDuration: .init(value: 300, timescale: 30))
-        let starts = try await SemanticSegmenter(client: OpenAIChatClient(config: config))
+        let result = try await SemanticSegmenter(client: OpenAIChatClient(config: config))
             .proposeSentenceStarts(for: t)
+        let starts = result.sentenceStarts
         print("live starts:", starts)
         #expect(starts.first == 0)
         #expect(starts.count >= 2, "26 词的三个语义句至少断成两句")

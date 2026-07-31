@@ -299,6 +299,15 @@ struct FailedView: View {
 struct EditorView: View {
     @EnvironmentObject var model: AppModel
 
+    private var showSegmentError: Binding<Bool> {
+        Binding(get: { model.aiError != nil },
+                set: { if !$0 { model.aiError = nil } })
+    }
+    private var showExportError: Binding<Bool> {
+        Binding(get: { model.exportError != nil },
+                set: { if !$0 { model.exportError = nil } })
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             HSplitView {
@@ -338,8 +347,10 @@ struct EditorView: View {
                 Button {
                     model.aiResegment()
                 } label: {
-                    if model.aiSegmenting {
-                        ProgressView().controlSize(.small)
+                    if model.aiSegmenting, let p = model.aiSegmentProgress {
+                        Label("断句 \(p.completed)/\(p.total)", systemImage: "wand.and.stars")
+                    } else if model.aiSegmenting {
+                        Label("断句中…", systemImage: "wand.and.stars")
                     } else {
                         Label("AI 断句", systemImage: "wand.and.stars")
                     }
@@ -393,18 +404,12 @@ struct EditorView: View {
             }
             .padding(28)
         }
-        .alert("AI 断句失败", isPresented: Binding(
-            get: { model.aiError != nil },
-            set: { if !$0 { model.aiError = nil } }
-        )) {
+        .alert("AI 断句失败", isPresented: showSegmentError) {
             Button("好") { model.aiError = nil }
         } message: {
             Text(model.aiError ?? "")
         }
-        .alert("导出失败", isPresented: Binding(
-            get: { model.exportError != nil },
-            set: { if !$0 { model.exportError = nil } }
-        )) {
+        .alert("导出失败", isPresented: showExportError) {
             Button("好") { model.exportError = nil }
         } message: {
             Text(model.exportError ?? "")

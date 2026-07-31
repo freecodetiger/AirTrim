@@ -7,23 +7,55 @@ struct SubtitleCardListView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        ScrollViewReader { proxy in
-            ScrollView {
-                LazyVStack(spacing: 6) {
-                    ForEach(Array(model.sentences.enumerated()), id: \.element.words.lowerBound) { index, sentence in
-                        SubtitleCard(index: index, sentence: sentence)
-                            .id(sentence.words.lowerBound)
-                    }
+        VStack(spacing: 0) {
+            // ── AI 断句进度 & 重试 ──
+            if let progress = model.aiSegmentProgress {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("AI 断句中… 第 \(progress.completed)/\(progress.total) 段")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
                 }
-                .padding(10)
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.accentColor.opacity(0.08))
+            } else if model.hasFailedChunks {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle")
+                        .foregroundStyle(.orange)
+                    Text("\(model.lastSegmentationResult?.failureCount ?? 0) 段使用了原始断句")
+                        .font(.callout).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("重试失败段落") {
+                        model.retryFailedChunks()
+                        model.clearSegmentationResult()
+                    }
+                    .buttonStyle(.borderless)
+                    .foregroundStyle(Color.accentColor)
+                    .font(.callout)
+                }
+                .padding(.horizontal, 12).padding(.vertical, 6)
+                .background(Color.orange.opacity(0.08))
+                .transition(.move(edge: .top).combined(with: .opacity))
             }
-            .onChange(of: model.currentSentenceStart) { _, start in
-                guard model.isPlaying, let start else { return }
-                withAnimation { proxy.scrollTo(start, anchor: .center) }
-            }
-            .onChange(of: model.selectedSentenceStart) { _, start in
-                guard let start else { return }
-                withAnimation { proxy.scrollTo(start, anchor: .center) }
+
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(spacing: 6) {
+                        ForEach(Array(model.sentences.enumerated()), id: \.element.words.lowerBound) { index, sentence in
+                            SubtitleCard(index: index, sentence: sentence)
+                                .id(sentence.words.lowerBound)
+                        }
+                    }
+                    .padding(10)
+                }
+                .onChange(of: model.currentSentenceStart) { _, start in
+                    guard model.isPlaying, let start else { return }
+                    withAnimation { proxy.scrollTo(start, anchor: .center) }
+                }
+                .onChange(of: model.selectedSentenceStart) { _, start in
+                    guard let start else { return }
+                    withAnimation { proxy.scrollTo(start, anchor: .center) }
+                }
             }
         }
         .background(Color(nsColor: .controlBackgroundColor))
@@ -44,6 +76,9 @@ struct SubtitleCard: View {
 
     private var isCurrent: Bool { model.currentSentenceStart == sentence.words.lowerBound }
     private var isSelected: Bool { model.selectedSentenceStart == sentence.words.lowerBound }
+    private var isInFailedChunk: Bool {
+        model.failedSentenceIndices.contains(index)
+    }
     private var edited: Bool {
         model.session.current.patch.textOverrides[sentence.words.lowerBound] != nil
     }
@@ -66,6 +101,10 @@ struct SubtitleCard: View {
                 }
                 if edited {
                     BadgeView(text: "已改", color: .accentColor)
+                }
+                if isInFailedChunk {
+                    BadgeView(text: "原断句", color: .orange)
+                        .help("此段 AI 断句未成功，保留原始断句——可重试")
                 }
                 if currentText.count > 32 {
                     BadgeView(text: "超长", color: .orange)

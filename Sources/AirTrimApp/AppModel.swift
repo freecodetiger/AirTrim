@@ -404,6 +404,27 @@ final class AppModel: ObservableObject {
 
     @Published var aiSegmenting = false
     @Published var aiError: String?
+    /// 分块进度：(已完成, 总数)，nil = 无进行中的分块任务
+    @Published var aiSegmentProgress: (completed: Int, total: Int)?
+    /// 上次断句结果（nil = 未运行或全部成功）
+    @Published private(set) var lastSegmentationResult: SegmentationResult?
+    /// 完成后弹出部分失败提示
+    @Published var showPartialResultAlert = false
+
+    /// 失败块覆盖的句下标集合（用于 UI 高亮）
+    var failedSentenceIndices: Set<Int> {
+        guard let result = lastSegmentationResult else { return [] }
+        var indices = Set<Int>()
+        for chunk in result.chunks where !chunk.succeeded {
+            indices.formUnion(chunk.sentenceRange)
+        }
+        return indices
+    }
+
+    /// 是否有失败块可重试
+    var hasFailedChunks: Bool {
+        lastSegmentationResult?.hasFailures ?? false
+    }
 
     func aiResegment() {
         guard let transcript, !aiSegmenting else { return }
@@ -412,17 +433,84 @@ final class AppModel: ObservableObject {
             return
         }
         aiSegmenting = true
-        Task {
+        aiSegmentProgress = nil
+        lastSegmentationResult = nil
+        Task { [weak self] in
+            guard let self else { return }
             do {
                 let segmenter = SemanticSegmenter(client: OpenAIChatClient(config: config))
-                let starts = try await segmenter.proposeSentenceStarts(for: transcript)
-                session.apply { $0.patch.sentenceStarts = starts }
-                refreshDerived()
+                let result = try await segmenter.proposeSentenceStarts(for: transcript) { completed, total, _ in
+                    Task { @MainActor [weak self] in
+                        self?.aiSegmentProgress = (completed, total)
+                    }
+                }
+                await MainActor.run {
+                    self.session.apply { $0.patch.sentenceStarts = result.sentenceStarts }
+                    self.lastSegmentationResult = result.hasFailures ? result : nil
+                    self.aiSegmentProgress = nil
+                    self.refreshDerived()
+                    self.aiSegmenting = false
+                    if result.hasFailures {
+                        self.showPartialResultAlert = true
+                    }
+                }
             } catch {
-                aiError = error.localizedDescription
+                await MainActor.run {
+                    self.aiError = error.localizedDescription
+                    self.aiSegmentProgress = nil
+                    self.lastSegmentationResult = nil
+                    self.aiSegmenting = false
+                }
             }
-            aiSegmenting = false
         }
+    }
+
+    /// 重试所有失败块
+    func retryFailedChunks() {
+        guard let transcript, let result = lastSegmentationResult, !aiSegmenting else { return }
+        guard let config = LLMConfig.load() else {
+            aiError = LLMError.notConfigured.localizedDescription
+            return
+        }
+        let failedIndices = result.failedChunkIndices
+        guard !failedIndices.isEmpty else { return }
+
+        aiSegmenting = true
+        aiSegmentProgress = (0, failedIndices.count)
+        lastSegmentationResult = nil
+        Task { [weak self] in
+            guard let self else { return }
+            let segmenter = SemanticSegmenter(client: OpenAIChatClient(config: config))
+            var current = result
+            for (i, chunkIndex) in failedIndices.enumerated() {
+                do {
+                    let newChunk = try await segmenter.retryChunk(
+                        for: transcript, chunkIndex: chunkIndex, previousResult: current)
+                    current = SemanticSegmenter.mergeRetriedChunk(
+                        newChunk, at: chunkIndex, into: current, transcript: transcript)
+                } catch {
+                    // 重试仍失败：保持原失败状态
+                }
+                await MainActor.run {
+                    self.aiSegmentProgress = (i + 1, failedIndices.count)
+                }
+            }
+            await MainActor.run {
+                self.session.apply { $0.patch.sentenceStarts = current.sentenceStarts }
+                self.lastSegmentationResult = current.hasFailures ? current : nil
+                self.aiSegmentProgress = nil
+                self.refreshDerived()
+                self.aiSegmenting = false
+                if current.hasFailures {
+                    self.showPartialResultAlert = true
+                }
+            }
+        }
+    }
+
+    /// 清空分块结果（用户手动编辑后 chunk 边界失效）
+    func clearSegmentationResult() {
+        lastSegmentationResult = nil
     }
 
     private func refreshDerived() {

@@ -151,3 +151,72 @@ struct SegmentAlignTests {
         #expect(starts == [0, 4])
     }
 }
+
+// MARK: - JSON 模式解析
+
+@Suite("JSON 断句解析")
+struct JSONBreakParseTests {
+
+    @Test func cleanJSONParsesCorrectly() throws {
+        let breaks = try SemanticSegmenter.parseBreakIndices(
+            from: #"{"b":[3,8]}"#, wordCount: 10)
+        #expect(breaks == [3, 8])
+    }
+
+    @Test func jsonWrappedInMarkdownCodeBlock() throws {
+        // DeepSeek 常见行为：在 JSON 外加 ```json 代码块
+        let breaks = try SemanticSegmenter.parseBreakIndices(
+            from: """
+            ```json
+            {"b": [1, 5]}
+            ```
+            """, wordCount: 7)
+        #expect(breaks == [1, 5])
+    }
+
+    @Test func jsonWithWhitespaceAndSingleElement() throws {
+        let breaks = try SemanticSegmenter.parseBreakIndices(
+            from: #" { "b" : [ 7 ] } "#, wordCount: 10)
+        #expect(breaks == [7])
+    }
+
+    @Test func emptyBreakArray() throws {
+        let breaks = try SemanticSegmenter.parseBreakIndices(
+            from: #"{"b":[]}"#, wordCount: 5)
+        #expect(breaks == [])
+    }
+
+    @Test func outOfRangeIndexThrows() {
+        #expect(throws: LLMError.self) {
+            try SemanticSegmenter.parseBreakIndices(
+                from: #"{"b":[3, 15]}"#, wordCount: 10)
+        }
+    }
+
+    @Test func negativeIndexThrows() {
+        #expect(throws: LLMError.self) {
+            try SemanticSegmenter.parseBreakIndices(
+                from: #"{"b":[-1, 2]}"#, wordCount: 5)
+        }
+    }
+
+    @Test func nonJSONResponseThrows() {
+        #expect(throws: LLMError.self) {
+            try SemanticSegmenter.parseBreakIndices(
+                from: "断句位置：3, 8", wordCount: 10)
+        }
+    }
+
+    @Test func missingBKeyThrows() {
+        #expect(throws: LLMError.self) {
+            try SemanticSegmenter.parseBreakIndices(
+                from: #"{"breaks":[1,2]}"#, wordCount: 5)
+        }
+    }
+
+    @Test func deduplicatesAndSorts() throws {
+        let breaks = try SemanticSegmenter.parseBreakIndices(
+            from: #"{"b":[8, 3, 5, 3]}"#, wordCount: 10)
+        #expect(breaks == [3, 5, 8])
+    }
+}

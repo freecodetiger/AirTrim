@@ -127,6 +127,30 @@ public struct SemanticSegmenter: Sendable {
     记住：你只做一件事——在合适的位置插入换行符。其他一切不变。
     """
 
+    /// JSON 模式 prompt：LLM 完全不接触原文，只输出词编号。
+    /// 用于前两次文本模式均失败后的终极回退——从根本上消灭 textMismatch。
+    static let jsonPrompt = """
+    你是字幕断句引擎。输入是"编号:词"格式的口播转写文本。
+    你的任务：指出在哪些词之后应该换行（断句）。
+
+    输出格式：{"b":[编号, 编号, …]}
+    - "b" 数组中的编号表示在该词之后断句
+    - 编号从 0 开始，对应输入的第 1 个词
+    - 编号必须递增，且严格对应输入中的词（不得越界、不得编造）
+    - 不包含最后一个词的编号（末尾自动断句）
+    - 断句后的每个段落应在 10-25 字之间，适合阅读
+    - 在标点、语气停顿、语义转折处断句
+    - 只输出 JSON 对象，不得有任何额外文字、markdown 代码块或解释
+
+    示例1：
+    输入：0:今天 1:我们 2:来 3:聊聊 4:AI 5:它 6:真的 7:很 8:强大
+    输出：{"b":[3,8]}
+
+    示例2（长句需要再断）：
+    输入：0:第一 1:点 2:呢 3:就是 4:说 5:我们 6:要 7:注意 8:安全 9:第二 10:点 11:就是 12:效率 13:问题
+    输出：{"b":[8,13]}
+    """
+
     // MARK: - 公共 API
 
     /// 全文断句，返回逐块结果。
@@ -150,7 +174,7 @@ public struct SemanticSegmenter: Sendable {
         return try await chunkedRequestsWithResult(for: transcript, onChunkComplete: onChunkComplete)
     }
 
-    /// 重试单个失败的块。内部已含自动重试（标准 prompt → 严厉 prompt）。
+    /// 重试单个失败的块。内部走三级回退（文本 → 严厉文本 → JSON 模式）。
     public func retryChunk(
         for transcript: Transcript,
         chunkIndex: Int,
@@ -280,9 +304,11 @@ public struct SemanticSegmenter: Sendable {
         return SegmentationResult(sentenceStarts: allStarts.sorted(), chunks: chunks)
     }
 
-    // MARK: - 核心：单块处理（含自动重试）
+    // MARK: - 核心：单块处理（三级回退：标准文本 → 严厉文本 → JSON 词编号）
 
-    /// 处理一个文本块：标准 prompt → 失败则用严厉 prompt 重试 → 仍失败则返回失败结果。
+    /// 处理一个文本块：标准 prompt → 严厉 prompt → JSON 模式。
+    /// 前两级用文本断行（LLM 最擅长的形态），第三级用词编号（LLM 不碰文字）。
+    /// 三级都失败才回退到原始断句。
     private func processChunk(
         wordTexts: [String],
         sentenceRange: Range<Int>,
@@ -290,33 +316,105 @@ public struct SemanticSegmenter: Sendable {
     ) async throws -> ChunkResult {
         let fullText = wordTexts.joined()
 
-        // 第一次尝试：标准 prompt
+        // 第一级：标准 prompt（few-shot 文本断行）
+        if let result = try? await attemptTextAlign(wordTexts: wordTexts, userText: fullText,
+                                                     system: Self.systemPrompt,
+                                                     sentenceRange: sentenceRange,
+                                                     wordRange: wordRange) {
+            return result
+        }
+
+        // 第二级：严厉 prompt（7 条铁律文本断行）
+        if let result = try? await attemptTextAlign(wordTexts: wordTexts, userText: fullText,
+                                                     system: Self.retryPrompt,
+                                                     sentenceRange: sentenceRange,
+                                                     wordRange: wordRange) {
+            return result
+        }
+
+        // 第三级：JSON 词编号模式（LLM 完全不碰原文）
+        if let result = try? await attemptJSONMode(wordTexts: wordTexts,
+                                                    sentenceRange: sentenceRange,
+                                                    wordRange: wordRange) {
+            return result
+        }
+
+        return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
+                           succeeded: false, localStarts: nil,
+                           errorDescription: "三级断句均失败")
+    }
+
+    /// 文本断行尝试：send text → get lines back → align.
+    /// textMismatch 静默返回 nil（由调用方回退到下一级）。
+    private func attemptTextAlign(
+        wordTexts: [String],
+        userText: String,
+        system: String,
+        sentenceRange: Range<Int>,
+        wordRange: Range<Int>
+    ) async throws -> ChunkResult? {
         do {
-            let reply = try await client.complete(system: Self.systemPrompt, user: fullText)
+            let reply = try await client.complete(system: system, user: userText)
             let starts = try Self.align(
                 wordTexts: wordTexts,
                 lines: reply.split(separator: "\n").map(String.init))
             return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
                                succeeded: true, localStarts: starts, errorDescription: nil)
         } catch LLMError.textMismatch {
-            // 第二次尝试：严厉 prompt
-            do {
-                let reply2 = try await client.complete(system: Self.retryPrompt, user: fullText)
-                let starts2 = try Self.align(
-                    wordTexts: wordTexts,
-                    lines: reply2.split(separator: "\n").map(String.init))
-                return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
-                                   succeeded: true, localStarts: starts2, errorDescription: nil)
-            } catch {
-                return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
-                                   succeeded: false, localStarts: nil,
-                                   errorDescription: error.localizedDescription)
-            }
-        } catch {
-            return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
-                               succeeded: false, localStarts: nil,
-                               errorDescription: error.localizedDescription)
+            return nil  // 静默，升级到下一级
         }
+    }
+
+    /// JSON 模式尝试：send numbered words → get {"b":[...]} back → compute starts.
+    /// 任何错误静默返回 nil。
+    private func attemptJSONMode(
+        wordTexts: [String],
+        sentenceRange: Range<Int>,
+        wordRange: Range<Int>
+    ) async throws -> ChunkResult? {
+        let numberedWords = wordTexts.enumerated()
+            .map { "\($0.offset):\($0.element)" }
+            .joined(separator: " ")
+        do {
+            let reply = try await client.complete(system: Self.jsonPrompt, user: numberedWords)
+            let breakAfter = try Self.parseBreakIndices(from: reply, wordCount: wordTexts.count)
+            // break_after → sentence_starts（首个句起点恒为 0）
+            var starts: [Int] = [0]
+            for b in breakAfter where b + 1 < wordTexts.count {
+                starts.append(b + 1)
+            }
+            return ChunkResult(sentenceRange: sentenceRange, wordRange: wordRange,
+                               succeeded: true, localStarts: Array(Set(starts)).sorted(),
+                               errorDescription: nil)
+        } catch {
+            return nil  // 三级全失败，由调用方回退
+        }
+    }
+
+    /// 解析 JSON 断句响应：{"b": [1, 4, 7]}
+    static func parseBreakIndices(from reply: String, wordCount: Int) throws -> [Int] {
+        // 容忍 LLM 在 JSON 前后加 markdown 代码块或说明文字
+        guard let jsonStart = reply.firstIndex(of: "{"),
+              let jsonEnd = reply.lastIndex(of: "}"),
+              jsonStart < jsonEnd else {
+            throw LLMError.badResponse("JSON 模式：未找到 JSON 对象")
+        }
+        let jsonStr = String(reply[jsonStart...jsonEnd])
+
+        guard let data = jsonStr.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let breaks = obj["b"] as? [Int] else {
+            throw LLMError.badResponse("JSON 模式：需要 {\"b\":[整数, ...]}")
+        }
+
+        // 校验所有编号在有效范围内
+        for b in breaks {
+            guard b >= 0 && b < wordCount else {
+                throw LLMError.badResponse("JSON 模式：断句编号 \(b) 越界（共 \(wordCount) 个词）")
+            }
+        }
+
+        return Array(Set(breaks)).sorted()
     }
 
     // MARK: - 对齐校验

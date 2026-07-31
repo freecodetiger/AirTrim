@@ -71,4 +71,50 @@ struct SegmentAlignTests {
                 lines: ["今天聊一个问题"])   // 丢了后半句
         }
     }
+
+    /// 模拟长文本场景：LLM 常见的小改动（添字/改字/漏字）都应被捕获
+    @Test func commonLLMMutationsAreRejected() throws {
+        let longWords = (0..<200).map { "词\($0)" }
+        let joined = longWords.joined()
+
+        // 中间漏了一个词（LLM 长文本注意力漂移常见错误）
+        var missing = longWords
+        missing.remove(at: 87)
+        #expect(throws: LLMError.self) {
+            try SemanticSegmenter.align(wordTexts: longWords, lines: [missing.joined()])
+        }
+
+        // 中间重复一个词
+        var duplicated = longWords
+        duplicated.insert("词42", at: 100)
+        #expect(throws: LLMError.self) {
+            try SemanticSegmenter.align(wordTexts: longWords, lines: [duplicated.joined()])
+        }
+
+        // 正确文本应通过（单行 = 只一句）
+        let starts = try SemanticSegmenter.align(wordTexts: longWords, lines: [joined])
+        #expect(starts == [0])
+    }
+
+    /// 多块对齐：模拟分块后逐块校验（每块独立 align）
+    @Test func multiChunkAlignment() throws {
+        let chunk1 = ["今天", "天气", "真好"]      // 6 chars: 今天天气真好
+        let chunk2 = ["我们", "去", "公园", "玩"]  // 6 chars: 我们去公园玩
+        let chunk3 = ["然后", "吃", "晚饭"]        // 4 chars: 然后吃晚饭
+
+        // 块 1：LLM 在 "天气" 后断句
+        let s1 = try SemanticSegmenter.align(wordTexts: chunk1,
+                                              lines: ["今天天气", "真好"])
+        #expect(s1 == [0, 2])
+
+        // 块 2：LLM 在 "公园" 后断句
+        let s2 = try SemanticSegmenter.align(wordTexts: chunk2,
+                                              lines: ["我们去", "公园玩"])
+        #expect(s2 == [0, 2])
+
+        // 块 3：LLM 不断句（单行）
+        let s3 = try SemanticSegmenter.align(wordTexts: chunk3,
+                                              lines: ["然后吃晚饭"])
+        #expect(s3 == [0])
+    }
 }

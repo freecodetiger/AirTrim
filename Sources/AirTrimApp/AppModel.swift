@@ -157,6 +157,13 @@ final class AppModel: ObservableObject {
                     return nil
                 }
             }
+            // Esc：清空剪刀模式未完成的起点（编辑中放行）
+            if event.keyCode == 53 {
+                if self.manualCutStart != nil {
+                    self.manualCutStart = nil
+                    return nil
+                }
+            }
             return event
         }
         // 模型存在但不完整时自动续传（断点续传跳过已完成的文件）
@@ -398,6 +405,35 @@ final class AppModel: ObservableObject {
 
     func undo() {
         if session.undo() { refreshDerived() }
+    }
+
+    // MARK: - 手动精确剪（剪刀模式，spec: docs/design/manual-cut.md）
+
+    @Published var isManualCutMode = false
+    /// 剪起点（源时间轴）。瞬态 UI 状态：不进 EditList、不持久化、不进 undo
+    @Published var manualCutStart: CMTime?
+
+    func toggleManualCutMode() {
+        isManualCutMode.toggle()
+        if !isManualCutMode { manualCutStart = nil }   // 退出时清残留起点，避免下次第一击误剪
+    }
+
+    /// 剪刀模式下轨道点击：第一击设起点，第二击执行 cut（每次 cut 恰好一步 undo）。
+    /// 落点经 ManualCutSnap 磁吸到词界/静音沿（±250ms 内），起点存吸附后的值供 UI 对齐。
+    func manualCut(at seconds: Double) {
+        guard isManualCutMode else { return }
+        let raw = CMTime(seconds: max(0, seconds), preferredTimescale: 600)
+        let t = transcript.map { ManualCutSnap.snap(raw, transcript: $0) } ?? raw
+        guard let start = manualCutStart else {
+            manualCutStart = t
+            return
+        }
+        manualCutStart = nil
+        let lo = CMTimeMinimum(start, t)
+        let hi = CMTimeMaximum(start, t)
+        guard CMTimeCompare(hi, lo) > 0 else { return }   // 同位置连点：忽略
+        session.apply { $0.edits.add(CMTimeRange(start: lo, end: hi)) }
+        refreshDerived()
     }
 
     // MARK: - AI 语义断句（LLMProvider · 只上传文字稿 · 结果走 EditSession 可 undo）

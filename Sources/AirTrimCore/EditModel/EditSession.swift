@@ -17,7 +17,7 @@ public struct EditSession: Sendable, Equatable {
             self.suggestions = suggestions
         }
 
-        // MARK: Suggestion 生命周期（accept 是区间进 EditList 的唯一路径）
+        // MARK: Suggestion 生命周期（accept 与手动精确剪是区间进 EditList 的两个入口）
 
         public mutating func accept(suggestionID id: UUID) {
             guard let i = suggestions.firstIndex(where: { $0.id == id }),

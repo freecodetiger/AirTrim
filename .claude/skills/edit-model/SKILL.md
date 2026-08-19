@@ -17,11 +17,12 @@ description: 改动剪辑状态（EditList/EDL）、建议(EditSuggestion)生命
 
 ```
 分析器产出 proposed
-   → 用户接受 accepted   → 区间合并进 EditList（唯一路径）
+   → 用户接受 accepted   → 区间合并进 EditList
    → 用户拒绝 rejected   → 保留记录（重跑分析时不重复打扰）
 ```
 
-- 建议不是剪辑：`EditSuggestion` 与 `EditList` 分离存储。
+- 区间进 EditList 有两个入口：建议 accept（含一键全收）与手动精确剪（剪刀模式）。都经 `EditList.add` 归并、都走 `EditSession.apply` 入 undo。
+- 建议不是剪辑：`EditSuggestion` 与 `EditList` 分离存储。手动剪的 in 点是瞬态 UI 状态，不进 EditList。
 - verbosity 建议**永不自动接受**；pause/filler 可"一键全收"，但同样走 accept 路径（可撤销）。
 - 重跑分析器时：新建议与已 rejected 的按区间去重，避免"拒绝过的又冒出来"。
 

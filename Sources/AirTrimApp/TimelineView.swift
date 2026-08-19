@@ -54,9 +54,11 @@ struct TrackAreaView: View {
                 .help("定位到播放头")
             }
             Spacer()
-            Text(timecode(model.currentSourceSeconds) + " / " + timecode(durationSeconds))
+            // 悬停时显示鼠标位置（毫秒精度，精确剪反馈）；否则显示播放头
+            Text((hoverSeconds.map { timecodeMs($0) } ?? timecodeMs(model.currentSourceSeconds))
+                 + " / " + timecode(durationSeconds))
                 .font(.system(.caption, design: .monospaced))
-                .foregroundStyle(.secondary)
+                .foregroundStyle(hoverSeconds != nil ? Color.accentColor : Color.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 4)
@@ -64,22 +66,99 @@ struct TrackAreaView: View {
 
     // MARK: - 轨道主体
 
+    @ViewBuilder
     private func track(width: CGFloat) -> some View {
         let pps = width / durationSeconds   // px per second
-        return ZStack(alignment: .topLeading) {
+        let base = ZStack(alignment: .topLeading) {
             canvasLayers(width: width, pps: pps)
             cueBlocks(pps: pps)
             suggestionBlocks(pps: pps)
             playhead(pps: pps)
+            // 剪刀模式起点标记线（瞬态 UI 状态）
+            if model.isManualCutMode, let start = model.manualCutStart {
+                Rectangle().fill(.orange.opacity(0.85))
+                    .frame(width: 2, height: 118)
+                    .offset(x: start.seconds * pps - 1)
+                    .allowsHitTesting(false)
+            }
+            // 常驻跟手细线：鼠标在轨道中就一直有反馈（剪刀模式显示吸附后的位置）
+            if let h = hoverSeconds {
+                let pos = model.isManualCutMode ? snappedSeconds(h) : h
+                Rectangle()
+                    .fill(model.isManualCutMode ? Color.orange.opacity(0.9) : Color.secondary.opacity(0.55))
+                    .frame(width: 1, height: 118)
+                    .offset(x: pos * pps - 0.5)
+                    .allowsHitTesting(false)
+            }
+            // 剪刀区间预览：起点 → 当前鼠标（吸附后），第二击前先看到要剪什么
+            if model.isManualCutMode, let start = model.manualCutStart, let h = hoverSeconds {
+                let lo = min(start.seconds, snappedSeconds(h))
+                let hi = max(start.seconds, snappedSeconds(h))
+                if hi > lo {
+                    Rectangle().fill(.orange.opacity(0.18))
+                        .frame(width: (hi - lo) * pps, height: 118)
+                        .offset(x: lo * pps, y: 0)
+                        .allowsHitTesting(false)
+                }
+            }
         }
         .frame(width: width, height: 118)
         .contentShape(Rectangle())
-        .highPriorityGesture(
-            DragGesture(minimumDistance: 0)
-                .onChanged { model.scrub(toSourceSeconds: $0.location.x / pps) }
-                .onEnded { _ in model.endScrub() }
-        )
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let location):
+                hoverSeconds = min(max(location.x / pps, 0), durationSeconds)
+            case .ended:
+                hoverSeconds = nil
+            }
+        }
+        .onHover { inside in
+            guard model.isManualCutMode else { return }
+            if inside && !scissorsCursorActive {
+                Self.scissorsCursor.push()
+                scissorsCursorActive = true
+            } else if !inside && scissorsCursorActive {
+                NSCursor.pop()
+                scissorsCursorActive = false
+            }
+        }
+        .onChange(of: model.isManualCutMode) { _, active in
+            if !active && scissorsCursorActive {   // 模式关闭时若光标还压着，弹回
+                NSCursor.pop()
+                scissorsCursorActive = false
+            }
+        }
+
+        if model.isManualCutMode {
+            base.highPriorityGesture(
+                SpatialTapGesture().onEnded { value in
+                    model.manualCut(at: value.location.x / pps)
+                }
+            )
+        } else {
+            base.highPriorityGesture(
+                DragGesture(minimumDistance: 0)
+                    .onChanged { model.scrub(toSourceSeconds: $0.location.x / pps) }
+                    .onEnded { _ in model.endScrub() }
+            )
+        }
     }
+
+    /// 剪刀模式下鼠标位置吸附后的秒值（与 manualCut 同语义，预览即落点）
+    private func snappedSeconds(_ s: Double) -> Double {
+        guard let transcript = model.transcript else { return s }
+        let t = CMTime(seconds: s, preferredTimescale: 600)
+        return ManualCutSnap.snap(t, transcript: transcript).seconds
+    }
+
+    /// 剪刀模式下轨道光标（SF Symbol scissors）
+    private static let scissorsCursor: NSCursor = {
+        let image = NSImage(systemSymbolName: "scissors", accessibilityDescription: "剪刀") ?? NSImage()
+        return NSCursor(image: image, hotSpot: NSPoint(x: 8, y: 8))
+    }()
+    @State private var scissorsCursorActive = false
+    /// 鼠标悬停在轨道上的位置（源轴秒；nil = 不在轨道上）
+    @State private var hoverSeconds: Double?
 
     /// 标尺刻度 + 波形 + 剪切区域着色（纯绘制走 Canvas，几百个元素零视图开销）
     private func canvasLayers(width: CGFloat, pps: CGFloat) -> some View {
@@ -217,6 +296,13 @@ struct TrackAreaView: View {
         let s = Int(seconds)
         return String(format: "%02d:%02d", s / 60, s % 60)
     }
+
+    /// 毫秒精度时码（悬停反馈 / 播放头显示用）
+    private func timecodeMs(_ seconds: Double) -> String {
+        let s = Int(seconds)
+        let ms = Int((seconds - Double(s)) * 1000)
+        return String(format: "%02d:%02d.%03d", s / 60, s % 60, ms)
+    }
 }
 
 /// verbosity 分类的显示名（LLM 契约四分类）
@@ -254,6 +340,21 @@ struct TightenBar: View {
             }
             .frame(width: 110)
             Text("紧").font(.caption2).foregroundStyle(.tertiary)
+
+            Divider().frame(height: 16)
+
+            // 手动精确剪（剪刀模式，docs/design/manual-cut.md）
+            Button {
+                model.toggleManualCutMode()
+            } label: {
+                Image(systemName: "scissors")
+                    .foregroundStyle(model.isManualCutMode ? Color.accentColor : Color.secondary)
+            }
+            .help("精确剪：点击定起点，再点剪掉（⌘Z 可撤回）")
+            if model.isManualCutMode {
+                Text(model.manualCutStart == nil ? "点起点…" : "点终点剪掉")
+                    .font(.caption).foregroundStyle(.orange)
+            }
 
             Divider().frame(height: 16)
 

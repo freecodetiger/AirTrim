@@ -1,7 +1,7 @@
 import CoreMedia
 import Foundation
 
-/// 建议式编辑的载体：与 EditList 分离存储，accept 是区间进 EditList 的唯一路径。
+/// 建议式编辑的载体：与 EditList 分离存储，accept 与手动精确剪是区间进 EditList 的两个入口。
 /// cut 在分析器产出时就定形（含词边界 padding 与最小停顿保留，设计 D-M2-1）。
 public struct EditSuggestion: Sendable, Equatable, Codable, Identifiable {
     public enum Kind: String, Codable, Sendable {

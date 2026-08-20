@@ -319,9 +319,8 @@ func verbosityLabel(_ c: EditSuggestion.VerbosityCategory) -> String {
 struct TightenBar: View {
     @EnvironmentObject var model: AppModel
     @State private var showVerbosityPanel = false
-    @State private var showPersonaPicker = false
 
-    /// 本地关键词推荐的人设（Picker 弹窗中标注推荐项）
+    /// 本地关键词推荐的人设（人设菜单中标注推荐项）
     private var suggestedPersonaID: String? { model.suggestedPersona().id }
 
     var body: some View {
@@ -415,8 +414,19 @@ struct TightenBar: View {
                 Button("取消") { /* 暂不支持取消 */ }
                     .disabled(true)
             } else {
-                Button("抖音文案") { showPersonaPicker = true }
-                    .help("选择文案类型并生成标题、配文和标签（只上传文字稿，结果在右侧边栏）")
+                Menu {
+                    ForEach(SocialCopyPersona.all) { persona in
+                        Button(persona.id == suggestedPersonaID
+                               ? "\(persona.displayName)（推荐）"
+                               : persona.displayName) {
+                            model.setPersona(persona)
+                            model.requestSocialCopy()
+                        }
+                    }
+                } label: {
+                    Text("抖音文案")
+                }
+                .help("选择文案类型并生成标题、配文和标签（只上传文字稿，结果在右侧边栏）")
             }
             if model.socialCopyResult != nil {
                 Button("查看文案") { model.showSocialPanel = true }
@@ -455,18 +465,6 @@ struct TightenBar: View {
         .padding(.vertical, 6)
         .background(Color(nsColor: .underPageBackgroundColor))
         .sheet(isPresented: $model.showVerbosityTopicPrompt) { VerbosityTopicSheet() }
-        .confirmationDialog("选择文案类型", isPresented: $showPersonaPicker, titleVisibility: .visible) {
-            ForEach(SocialCopyPersona.all) { persona in
-                Button(persona.id == suggestedPersonaID
-                       ? "\(persona.displayName)（推荐）"
-                       : persona.displayName) {
-                    model.setPersona(persona)
-                    model.requestSocialCopy()
-                }
-            }
-        } message: {
-            Text("针对所选赛道生成标题、文案与标签（已剪辑内容不参与分析）")
-        }
         .alert("识别废话失败", isPresented: Binding(
             get: { model.verbosityError != nil },
             set: { if !$0 { model.verbosityError = nil } }

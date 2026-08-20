@@ -6,7 +6,6 @@ import Foundation
 public struct EditSuggestion: Sendable, Equatable, Codable, Identifiable {
     public enum Kind: String, Codable, Sendable {
         case pause
-        case filler
         /// 永不自动接受（acceptAllProposed 模型层硬性拒绝，D-M3-2）
         case verbosity
     }

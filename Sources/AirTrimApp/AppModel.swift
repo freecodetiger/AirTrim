@@ -620,20 +620,14 @@ final class AppModel: ObservableObject {
         previewTightened = true
     }
 
-    // MARK: - M3 AI 建议：清除语气词（本地）· 识别废话（LLM）
+    // MARK: - M3 AI 建议：识别废话（LLM）
 
-    /// 上次语气词分析的命中数（nil = 未跑过；0 → 显示「未发现语气词」）
-    @Published private(set) var lastFillerRunFound: Int?
     @Published private(set) var verbosityRunning = false
     @Published var verbosityError: String?
     /// 可选「视频主题」一句话输入（提升离题判定）
     @Published var showVerbosityTopicPrompt = false
     @Published var verbosityTopic = ""
     private var verbosityTask: Task<Void, Never>?
-
-    var proposedFillers: [EditSuggestion] {
-        session.current.suggestions.filter { $0.state == .proposed && $0.kind == .filler }
-    }
 
     var proposedVerbosity: [EditSuggestion] {
         session.current.suggestions.filter { $0.state == .proposed && $0.kind == .verbosity }
@@ -642,27 +636,6 @@ final class AppModel: ObservableObject {
     /// 轨道绘制用：全部 proposed 建议（按 kind 着色）
     var proposedSuggestions: [EditSuggestion] {
         session.current.suggestions.filter { $0.state == .proposed }
-    }
-
-    /// 清除语气词：纯本地同步调用（<100ms，无进度条）；刷新不入 undo 栈
-    func runFillerAnalysis() {
-        guard let transcript, !transcript.silences.isEmpty else { return }
-        let fresh = FillerAnalyzer.suggest(
-            transcript: transcript,
-            effectiveSentences: session.current.patch.effectiveSentences(in: transcript),
-            silences: transcript.silences,
-            params: TightenParams(intensity: tightenIntensity, minGapSeconds: tightenMinGap))
-        lastFillerRunFound = fresh.count
-        session.refreshProposed(with: fresh, of: .filler)
-        refreshDerived()
-    }
-
-    /// 语气词可一键全收（与停顿同级置信；⌘Z 一步整体回退）。收完自动切成片预览（同一键紧凑）。
-    func acceptAllFillers() {
-        guard !proposedFillers.isEmpty else { return }
-        session.apply { $0.acceptAllProposed(of: .filler) }
-        refreshDerived()
-        previewTightened = true
     }
 
     /// 识别废话入口：先查配置（可行动报错，与 AI 断句同文案），再弹主题输入

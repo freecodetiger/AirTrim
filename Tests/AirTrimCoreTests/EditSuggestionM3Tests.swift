@@ -28,15 +28,13 @@ struct EditSuggestionM3Tests {
         #expect(snapshot.edits.cuts.isEmpty)
     }
 
-    @Test("pause/filler 一键全收正常工作")
-    func acceptAllWorksForPauseAndFiller() {
+    @Test("pause 一键全收正常工作")
+    func acceptAllWorksForPause() {
         var snapshot = EditSession.Snapshot()
         snapshot.suggestions = [suggestion(.pause, 1, 2),
-                                suggestion(.filler, 3, 4),
                                 suggestion(.verbosity, 5, 6)]
         snapshot.acceptAllProposed(of: .pause)
-        snapshot.acceptAllProposed(of: .filler)
-        #expect(snapshot.edits.cuts == [r(1, 2), r(3, 4)])
+        #expect(snapshot.edits.cuts == [r(1, 2)])
         // verbosity 不受同批操作波及
         #expect(snapshot.suggestions.first { $0.kind == .verbosity }?.state == .proposed)
     }
@@ -55,10 +53,10 @@ struct EditSuggestionM3Tests {
     func replaceProposedIsolatesKinds() {
         var snapshot = EditSession.Snapshot()
         snapshot.suggestions = [suggestion(.pause, 1, 2),
-                                suggestion(.filler, 3, 4)]
-        snapshot.replaceProposed(with: [suggestion(.filler, 5, 6)], of: .filler)
+                                suggestion(.verbosity, 3, 4)]
+        snapshot.replaceProposed(with: [suggestion(.verbosity, 5, 6)], of: .verbosity)
         #expect(snapshot.suggestions.filter { $0.kind == .pause }.count == 1)
-        #expect(snapshot.suggestions.filter { $0.kind == .filler }.map(\.cut) == [r(5, 6)])
+        #expect(snapshot.suggestions.filter { $0.kind == .verbosity }.map(\.cut) == [r(5, 6)])
     }
 
     @Test("M3 新字段编解码往返；缺省字段解码为 nil（M2 档兼容）")

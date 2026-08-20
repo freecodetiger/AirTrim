@@ -22,10 +22,9 @@
 - 波形时间线（显示切割区间）+ `AVMutableComposition` 实时预览。
 - 剪切听感参数体系落地（最小停顿保留 / crossfade / 词边界 padding）。
 
-## M3 · AI 建议闭环（三个「一键」齐活）
+## M3 · AI 建议闭环
 
-- FillerAnalyzer（语气词词表 + 词级时间戳）。
-- VerbosityAnalyzer + LLMProvider（BYOK：Claude / OpenAI / DeepSeek / Ollama；Key 存 Keychain）。
+- VerbosityAnalyzer + LLMProvider（BYOK：Claude / OpenAI / DeepSeek / Ollama）。
 - 建议审阅 UI：按类别着色、逐条/按类接受、切点跳听预览。
 
 ## 之后（不承诺顺序）

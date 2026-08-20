@@ -258,7 +258,6 @@ struct TrackAreaView: View {
     static func color(for kind: EditSuggestion.Kind) -> Color {
         switch kind {
         case .pause: .orange
-        case .filler: .blue
         case .verbosity: .purple
         }
     }
@@ -268,8 +267,6 @@ struct TrackAreaView: View {
         switch s.kind {
         case .pause:
             return "停顿 \(String(format: "%.1f", s.originalGap.duration.seconds))s，建议剪 \(saved)s"
-        case .filler:
-            return "语气词「\(s.detail ?? "")」，建议剪 \(saved)s"
         case .verbosity:
             return "\(s.category.map(verbosityLabel) ?? "废话")，建议整句剪 \(saved)s"
         }
@@ -319,9 +316,7 @@ func verbosityLabel(_ c: EditSuggestion.VerbosityCategory) -> String {
 struct TightenBar: View {
     @EnvironmentObject var model: AppModel
     @State private var showVerbosityPanel = false
-
-    /// 本地关键词推荐的人设（人设菜单中标注推荐项）
-    private var suggestedPersonaID: String? { model.suggestedPersona().id }
+    @State private var showPositionPicker = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -374,47 +369,17 @@ struct TightenBar: View {
 
             Divider().frame(height: 16)
 
-            // 清除语气词（本地词表，即时）
-            Button("清除语气词") { model.runFillerAnalysis() }
-                .disabled(model.transcript?.silences.isEmpty ?? true)
-                .help((model.transcript?.silences.isEmpty ?? true)
-                    ? "波形分析中，稍候再试"
-                    : "本地词表匹配嗯/啊/呃等语气词，即时出建议")
-            if !model.proposedFillers.isEmpty {
-                let savings = model.proposedFillers.reduce(0.0) { $0 + $1.cut.duration.seconds }
-                Text("\(model.proposedFillers.count) 个语气词 · 可省 \(String(format: "%.1f", savings))s")
-                    .font(.caption).foregroundStyle(.blue)
-                Button("全部接受") { model.acceptAllFillers() }
-                    .help("接受全部语气词建议（⌘Z 可整体撤销）")
-            } else if model.lastFillerRunFound == 0 {
-                Text("未发现语气词").font(.caption).foregroundStyle(.secondary)
-            }
-
-            Divider().frame(height: 16)
-
-            // 一键生成抖音文案（AI，生成前可切换人设；人设即偏好，切换后持久化）
+            // 一键生成抖音文案：点击先选视频定位（强关联），选中即生成
             if model.socialCopyRunning {
                 ProgressView().controlSize(.small)
                 Button("生成中…") { /* 暂不支持取消 */ }
                     .disabled(true)
             } else {
-                Button("一键生成抖音文案") { model.requestSocialCopy() }
-                    .help("用当前人设生成标题、配文和标签（只上传文字稿，结果在右侧边栏）")
-                Menu {
-                    ForEach(SocialCopyPersona.all) { persona in
-                        Button(persona.id == suggestedPersonaID
-                               ? "\(persona.displayName)（推荐）"
-                               : persona.displayName) {
-                            model.setPersona(persona)
-                        }
+                Button("一键生成抖音文案") { showPositionPicker = true }
+                    .help("先选这个视频的定位（受众），再生成标题、配文和标签（只上传文字稿）")
+                    .popover(isPresented: $showPositionPicker, arrowEdge: .bottom) {
+                        CopyPositionPicker(isPresented: $showPositionPicker)
                     }
-                } label: {
-                    HStack(spacing: 4) {
-                        Text(model.socialCopyPersona.displayName)
-                        Image(systemName: "chevron.down").font(.caption2)
-                    }
-                }
-                .help("当前人设：\(model.socialCopyPersona.displayName)。切换后持久化，下次生成即用")
             }
             if model.socialCopyResult != nil {
                 Button("查看文案") { model.showSocialPanel = true }
@@ -423,12 +388,12 @@ struct TightenBar: View {
 
             Divider().frame(height: 16)
 
-            // 识别废话（LLM，异步可取消；建议永不自动接受）
+            // 一键识别废话（LLM，异步可取消；建议永不自动接受）
             if model.verbosityRunning {
                 ProgressView().controlSize(.small)
                 Button("取消") { model.cancelVerbosityAnalysis() }
             } else {
-                Button("识别废话") { model.requestVerbosityAnalysis() }
+                Button("一键识别废话") { model.requestVerbosityAnalysis() }
                     .help("LLM 通读文字稿找可整句删除的废话（只上传文字，需配置 LLM）")
             }
             if !model.proposedVerbosity.isEmpty {
@@ -461,6 +426,77 @@ struct TightenBar: View {
         } message: {
             Text(model.verbosityError ?? "")
         }
+    }
+}
+
+/// 视频定位选择：点「一键生成抖音文案」弹出，选中定位立即生成。
+/// 每项 = 名称 + 一句话描述；关键词推荐项标「推荐」；上次定位预选中（高亮）。
+struct CopyPositionPicker: View {
+    @EnvironmentObject var model: AppModel
+    @Binding var isPresented: Bool
+
+    private var recommended: SocialCopyPersona { model.suggestedPersona() }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("这个视频的定位是？").font(.headline)
+            Text("定位决定标题钩子、文案语气和标签方向").font(.caption).foregroundStyle(.secondary)
+
+            ScrollView {
+                VStack(spacing: 6) {
+                    ForEach(SocialCopyPersona.all) { persona in
+                        Button {
+                            model.setPersona(persona)
+                            isPresented = false
+                            model.requestSocialCopy()
+                        } label: {
+                            row(persona,
+                                isSelected: persona.id == model.socialCopyPersona.id,
+                                isRecommended: persona.id == recommended.id)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .frame(width: 300, height: 300)
+
+            HStack {
+                Button("取消") { isPresented = false }
+                Spacer()
+                Text("选择后立即生成").font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .padding(14)
+    }
+
+    /// 单个定位选项行：名称 + 描述 + 推荐/选中角标
+    private func row(_ persona: SocialCopyPersona,
+                     isSelected: Bool, isRecommended: Bool) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(persona.displayName).font(.subheadline).bold()
+                    if isRecommended {
+                        Text("推荐").font(.caption2).foregroundStyle(.orange)
+                    }
+                }
+                Text(persona.description)
+                    .font(.caption).foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 8)
+            if isSelected {
+                Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8).fill(rowBackground(isSelected)))
+    }
+
+    private func rowBackground(_ selected: Bool) -> Color {
+        selected ? Color.accentColor.opacity(0.1) : Color.secondary.opacity(0.08)
     }
 }
 
@@ -569,12 +605,6 @@ struct SuggestionReviewPopover: View {
                       systemImage: "waveform.badge.minus")
                     .font(.callout)
                 Text("保留自然停顿，切点带词边界保护")
-                    .font(.caption).foregroundStyle(.secondary)
-            case .filler:
-                Label("语气词「\(suggestion.detail ?? "")」 · 建议剪掉 \(savedText) 秒",
-                      systemImage: "bubble.left")
-                    .font(.callout)
-                Text("删词后两侧停顿合并，不留双倍空洞；字幕同步剔词")
                     .font(.caption).foregroundStyle(.secondary)
             case .verbosity:
                 Label("\(suggestion.category.map(verbosityLabel) ?? "废话") · 建议整句剪除 \(savedText) 秒",

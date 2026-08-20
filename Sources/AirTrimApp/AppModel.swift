@@ -12,7 +12,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class AppModel: ObservableObject {
     enum Stage {
-        case needsModel
+        case environmentSetup
         case idle
         case transcribing(fileName: String, startedAt: Date)
         case editor
@@ -20,6 +20,10 @@ final class AppModel: ObservableObject {
     }
 
     @Published var stage: Stage = .idle
+    /// 环境是否就绪：语音模型 + LLM 都配置（D-EAS-1 硬门槛）
+    var environmentReady: Bool { modelFolder != nil && LLMConfig.isConfigured }
+    /// 环境未就绪时点开的项目，就绪后继续打开（不丢意图）
+    @Published var pendingProjectURL: URL?
     // 转写真实进度（显示值；权威时间永远在 Transcript）
     @Published private(set) var transcribePhaseText = ""
     @Published private(set) var transcribeFraction: Double?
@@ -121,7 +125,7 @@ final class AppModel: ObservableObject {
                 self.installProgress = nil
                 self.modelFolder = modelDir
                 self.refreshInstalledModels()
-                if case .needsModel = stage { stage = .idle }
+                // 留在环境准备页：等 LLM 也就绪后由「进入工作流」放行（D-EAS-1）
             } catch {
                 self.installProgress = nil
                 self.installError = error.localizedDescription
@@ -135,7 +139,7 @@ final class AppModel: ObservableObject {
 
     init() {
         modelFolder = Self.discoverModel()
-        if modelFolder == nil { stage = .needsModel }
+        if modelFolder == nil || !LLMConfig.isConfigured { stage = .environmentSetup }
         loadProjects()
         // 空格键全局监听：无论焦点在哪个视图（AVPlayerView / TextField / 轨道），
         // 空格一律触发播放/暂停。仅当 NSTextView 正在编辑时放行（打字需要空格）。
@@ -218,7 +222,18 @@ final class AppModel: ObservableObject {
         panel.message = "选择包含 *.mlmodelc 的 WhisperKit 模型目录（如 openai_whisper-large-v3）"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         modelFolder = url
-        stage = .idle
+        // 留在环境准备页：等 LLM 也就绪后由「进入工作流」放行（D-EAS-1）
+    }
+
+    /// 环境准备页「进入工作流」：双就绪后回项目列表；有点开的项目则继续打开（不丢意图）
+    func finishEnvironmentSetup() {
+        guard environmentReady else { return }
+        if let pending = pendingProjectURL {
+            pendingProjectURL = nil
+            start(url: pending)
+        } else {
+            stage = .idle
+        }
     }
 
     // MARK: - 应用内模型下载（设计 D1；网络只在 App 层）
@@ -239,7 +254,7 @@ final class AppModel: ObservableObject {
                 }
                 self.installProgress = nil
                 self.modelFolder = modelDir
-                self.stage = .idle
+                // 留在环境准备页：等 LLM 也就绪后由「进入工作流」放行（D-EAS-1）
             } catch {
                 self.installProgress = nil
                 self.installError = error.localizedDescription
@@ -256,6 +271,12 @@ final class AppModel: ObservableObject {
     }
 
     func start(url: URL, forceRetranscribe: Bool = false) {
+        // D-EAS-1 硬门槛：模型 + LLM 双就绪才进核心工作流；否则停环境准备页（记住意图）
+        guard environmentReady else {
+            pendingProjectURL = url
+            stage = .environmentSetup
+            return
+        }
         // 缓存命中：转写 + 修订全部恢复，秒开（持久化设计 D7）
         if !forceRetranscribe, let doc = ProjectStore.load(for: url) {
             sourceURL = url
@@ -271,7 +292,7 @@ final class AppModel: ObservableObject {
             backfillDerivedAudioIfNeeded(url: url)
             return
         }
-        guard let modelFolder else { stage = .needsModel; return }
+        guard let modelFolder else { stage = .environmentSetup; return }
         sourceURL = url
         stage = .transcribing(fileName: url.lastPathComponent, startedAt: Date())
         transcribePhaseText = "抽取音频…"
@@ -960,7 +981,7 @@ final class AppModel: ObservableObject {
         try? FileManager.default.removeItem(at: folder)
         modelFolder = Self.discoverModel()
         refreshInstalledModels()
-        if modelFolder == nil && transcript == nil { stage = .needsModel }
+        if modelFolder == nil && transcript == nil { stage = .environmentSetup }
     }
 
     // MARK: - 预览播放（UI 层；时间只从 Transcript 派生）

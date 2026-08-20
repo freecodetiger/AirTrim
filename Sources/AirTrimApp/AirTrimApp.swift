@@ -43,7 +43,7 @@ struct RootView: View {
 
     var body: some View {
         switch model.stage {
-        case .needsModel: SetupView()
+        case .environmentSetup: EnvironmentSetupView()
         case .idle: ProjectHomeView()
         case .transcribing(let name, let start): TranscribingView(fileName: name, startedAt: start)
         case .editor: EditorView()
@@ -52,42 +52,125 @@ struct RootView: View {
     }
 }
 
-struct SetupView: View {
+/// 环境准备页：语音模型 + LLM 双就绪后才放行进入核心工作流（D-EAS-1 硬门槛）。
+struct EnvironmentSetupView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        VStack(spacing: 16) {
-            Image(systemName: "cpu").font(.system(size: 44)).foregroundStyle(.secondary)
-            Text("首次使用：下载语音识别模型").font(.title2)
-            Text("AirTrim 完全本地转写，不上传任何音视频。\n模型只需下载一次（3.1 GB，支持断点续传，国内自动走镜像源）。")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-
-            if let progress = model.installProgress {
-                VStack(spacing: 6) {
-                    ProgressView(value: progress.fraction)
-                        .frame(width: 320)
-                    Text("\(Int(progress.fraction * 100))% · \(progress.filesDone)/\(progress.filesTotal) 个文件 · \(progress.currentFile)")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("环境准备").font(.title2.bold())
+                    Text("就绪后才能进入剪辑工作流。本地转写不上传任何音视频；AI 功能只上传文字稿。")
+                        .font(.callout).foregroundStyle(.secondary)
                 }
-            } else {
-                Button("下载模型（3.1 GB）") { model.downloadModel() }
-                    .keyboardShortcut(.defaultAction)
-                    .controlSize(.large)
-            }
 
-            if let error = model.installError {
-                Text(error).font(.caption).foregroundStyle(.red)
-                Button("重试（从断点继续）") { model.downloadModel() }
-            }
+                // ① 语音模型
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Label("语音模型", systemImage: "waveform").font(.headline)
+                        Spacer()
+                        if model.modelFolder != nil {
+                            Label("就绪", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green).font(.callout)
+                        }
+                    }
+                    if let progress = model.installProgress {
+                        VStack(spacing: 6) {
+                            ProgressView(value: progress.fraction)
+                            Text("\(Int(progress.fraction * 100))% · \(progress.currentFile)")
+                                .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        }
+                    } else if model.modelFolder == nil {
+                        Button("下载模型（3.1 GB）") { model.downloadModel() }
+                        if let error = model.installError {
+                            Text(error).font(.caption).foregroundStyle(.red)
+                            Button("重试（从断点继续）") { model.downloadModel() }
+                        }
+                        Button("已有模型？选择目录…") { model.chooseModelFolder() }
+                            .buttonStyle(.link)
+                    } else {
+                        Text("模型已就绪").font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(16)
+                .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
 
-            Divider().frame(width: 240)
-            Button("已有模型？选择目录…") { model.chooseModelFolder() }
-                .buttonStyle(.link)
+                // ② LLM（大模型 API）
+                LLMSetupForm()
+
+                // ③ 放行
+                HStack {
+                    Text(model.pendingProjectURL != nil ? "就绪后继续打开所选项目" : "就绪后进入项目列表")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("进入工作流") { model.finishEnvironmentSetup() }
+                        .buttonStyle(.borderedProminent)
+                        .controlSize(.large)
+                        .disabled(!model.environmentReady)
+                        .keyboardShortcut(.defaultAction)
+                }
+            }
+            .padding(28)
+            .frame(maxWidth: 560)
+            .frame(maxWidth: .infinity)
         }
-        .padding(40)
+    }
+}
+
+/// 环境准备页里的紧凑 LLM 表单（OpenAI 兼容；完整版在设置页，含测试连接）
+struct LLMSetupForm: View {
+    @EnvironmentObject var model: AppModel
+    @State private var apiKey = ""
+    @State private var baseURL = LLMConfig.defaultBaseURL
+    @State private var llmModel = LLMConfig.defaultModel
+    @State private var status: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Label("AI 服务（大模型 API）", systemImage: "sparkles").font(.headline)
+                Spacer()
+                if LLMConfig.isConfigured {
+                    Label("就绪", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green).font(.callout)
+                }
+            }
+            LabeledContent("API Key") {
+                TextField("sk-…", text: $apiKey).textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("Base URL") {
+                TextField(LLMConfig.defaultBaseURL, text: $baseURL).textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("模型") {
+                TextField(LLMConfig.defaultModel, text: $llmModel).textFieldStyle(.roundedBorder)
+            }
+            HStack {
+                Button("保存") { save() }
+                    .disabled(apiKey.isEmpty)
+                if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+            }
+            Text("OpenAI 兼容格式（DeepSeek / OpenAI / Ollama…）；只上传文字稿。")
+                .font(.caption).foregroundStyle(.tertiary)
+        }
+        .padding(16)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+        .onAppear {
+            if let config = LLMConfig.load() {
+                apiKey = config.apiKey
+                baseURL = config.baseURL.absoluteString
+                llmModel = config.model
+            }
+        }
+    }
+
+    private func save() {
+        do {
+            try LLMConfig.save(baseURLString: baseURL, model: llmModel, apiKey: apiKey)
+            status = "已保存"
+        } catch {
+            status = error.localizedDescription
+        }
     }
 }
 

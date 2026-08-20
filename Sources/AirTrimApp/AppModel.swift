@@ -733,62 +733,6 @@ final class AppModel: ObservableObject {
         refreshDerived()
     }
 
-    // MARK: - AI 字幕纠错
-
-    @Published var correctionRunning = false
-    @Published var correctionError: String?
-    @Published var correctionDiffs: [(sentence: TranscriptSentence, original: String, corrected: String)] = []
-    @Published var showCorrectionReview = false
-
-    func requestTranscriptCorrection() {
-        guard let transcript, !correctionRunning else { return }
-        guard LLMConfig.isConfigured else {
-            correctionError = LLMError.notConfigured.localizedDescription
-            return
-        }
-        correctionRunning = true
-        correctionError = nil
-        let sentences = transcript.sentences
-        Task {
-            do {
-                let config = LLMConfig.load()!
-                let corrector = TranscriptCorrector(client: OpenAIChatClient(config: config))
-                let corrections = try await corrector.correct(transcript: transcript)
-                await MainActor.run {
-                    self.correctionDiffs = sentences.compactMap { s in
-                        guard let corrected = corrections[s.id],
-                              corrected != transcript.sentenceText(s) else { return nil }
-                        return (s, transcript.sentenceText(s), corrected)
-                    }
-                    self.showCorrectionReview = !self.correctionDiffs.isEmpty
-                    self.correctionRunning = false
-                    if self.correctionDiffs.isEmpty {
-                        self.correctionError = nil  // 没有错误也是一种成功
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    self.correctionError = error.localizedDescription
-                    self.correctionRunning = false
-                }
-            }
-        }
-    }
-
-    func applyCorrections(_ diffs: [(sentence: TranscriptSentence, original: String, corrected: String)]) {
-        guard transcript != nil else { return }
-        session.apply { snapshot in
-            for (sentence, original, corrected) in diffs {
-                snapshot.patch.overrideText(
-                    sentenceStartingAt: sentence.words.lowerBound,
-                    original: original, text: corrected)
-            }
-        }
-        correctionDiffs = []
-        showCorrectionReview = false
-        refreshDerived()
-    }
-
     // MARK: - AI 社交媒体文案（标题 + 配文 + 标签）
 
     @Published var socialCopyRunning = false

@@ -1,7 +1,7 @@
 import SwiftUI
 
 /// AI 生成社交媒体文案侧边栏：标题 + 配文 + 标签 + 推荐组合。
-/// 每个区块带一键复制按钮。
+/// 每个区块带一键复制按钮。人设选择在工具栏（生成按钮旁），此处仅展示结果。
 struct SocialCopyPanel: View {
     @EnvironmentObject var model: AppModel
 

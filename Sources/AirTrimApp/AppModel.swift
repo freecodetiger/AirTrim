@@ -733,68 +733,51 @@ final class AppModel: ObservableObject {
         refreshDerived()
     }
 
-    // MARK: - AI 字幕纠错
-
-    @Published var correctionRunning = false
-    @Published var correctionError: String?
-    @Published var correctionDiffs: [(sentence: TranscriptSentence, original: String, corrected: String)] = []
-    @Published var showCorrectionReview = false
-
-    func requestTranscriptCorrection() {
-        guard let transcript, !correctionRunning else { return }
-        guard LLMConfig.isConfigured else {
-            correctionError = LLMError.notConfigured.localizedDescription
-            return
-        }
-        correctionRunning = true
-        correctionError = nil
-        let sentences = transcript.sentences
-        Task {
-            do {
-                let config = LLMConfig.load()!
-                let corrector = TranscriptCorrector(client: OpenAIChatClient(config: config))
-                let corrections = try await corrector.correct(transcript: transcript)
-                await MainActor.run {
-                    self.correctionDiffs = sentences.compactMap { s in
-                        guard let corrected = corrections[s.id],
-                              corrected != transcript.sentenceText(s) else { return nil }
-                        return (s, transcript.sentenceText(s), corrected)
-                    }
-                    self.showCorrectionReview = !self.correctionDiffs.isEmpty
-                    self.correctionRunning = false
-                    if self.correctionDiffs.isEmpty {
-                        self.correctionError = nil  // 没有错误也是一种成功
-                    }
-                }
-            } catch {
-                await MainActor.run {
-                    self.correctionError = error.localizedDescription
-                    self.correctionRunning = false
-                }
-            }
-        }
-    }
-
-    func applyCorrections(_ diffs: [(sentence: TranscriptSentence, original: String, corrected: String)]) {
-        guard transcript != nil else { return }
-        session.apply { snapshot in
-            for (sentence, original, corrected) in diffs {
-                snapshot.patch.overrideText(
-                    sentenceStartingAt: sentence.words.lowerBound,
-                    original: original, text: corrected)
-            }
-        }
-        correctionDiffs = []
-        showCorrectionReview = false
-        refreshDerived()
-    }
-
     // MARK: - AI 社交媒体文案（标题 + 配文 + 标签）
 
     @Published var socialCopyRunning = false
     @Published var socialCopyError: String?
     @Published var socialCopyResult: String?
     @Published var showSocialPanel = false
+    /// 当前人设（UserDefaults 持久化；Persona 是纯值类型，见 SocialCopyPersona）
+    @Published var socialCopyPersona: SocialCopyPersona = AppModel.loadSavedPersona()
+
+    private static let personaKey = "socialCopyPersona"
+
+    private static func loadSavedPersona() -> SocialCopyPersona {
+        let saved = UserDefaults.standard.string(forKey: personaKey)
+        return SocialCopyPersona.all.first { $0.id == saved } ?? .general
+    }
+
+    func setPersona(_ persona: SocialCopyPersona) {
+        socialCopyPersona = persona
+        UserDefaults.standard.set(persona.id, forKey: Self.personaKey)
+    }
+
+    /// 本地关键词粗扫文字稿，给出「推荐人设」（命中最多者胜，平手取 `all` 序）。
+    /// 只用于 Picker 默认值与推荐角标，不覆盖用户已保存的选择。零 LLM 成本。
+    func suggestedPersona() -> SocialCopyPersona {
+        guard let transcript else { return .general }
+        let sample = String(transcript.sentences.prefix(20)
+            .map { sentenceText($0) }
+            .joined().prefix(500)).lowercased()
+        var best: (persona: SocialCopyPersona, hits: Int)?
+        for persona in SocialCopyPersona.all {
+            let words = Self.personaKeywords[persona.id] ?? []
+            let hits = words.reduce(0) { $0 + (sample.contains($1) ? 1 : 0) }
+            if hits > (best?.hits ?? 0) { best = (persona, hits) }
+        }
+        guard let best, best.hits > 0 else { return .general }
+        return best.persona
+    }
+
+    private static let personaKeywords: [String: [String]] = [
+        "tech-growth": ["代码", "编程", "程序员", "架构", "算法", "框架", "bug", "重构", "开发", "上线", "模型", "ai", "接口", "调试"],
+        "career": ["职场", "上班", "加班", "领导", "同事", "晋升", "绩效", "面试", "简历", "副业", "跳槽", "打工人", "会议"],
+        "beauty": ["护肤", "底妆", "化妆", "粉底", "卡粉", "口红", "精华", "面膜", "成分", "皮肤", "妆容", "防晒"],
+        "fitness": ["健身", "训练", "减脂", "增肌", "深蹲", "跑步", "动作", "体态", "热量", "蛋白", "腹肌", "拉伸", "瘦"],
+        "parenting": ["孩子", "宝宝", "育儿", "幼儿园", "小孩", "家长", "情绪", "辅食", "学校", "绘本", "习惯", "哭"],
+    ]
 
     func requestSocialCopy() {
         guard let transcript, !socialCopyRunning else { return }
@@ -818,7 +801,7 @@ final class AppModel: ObservableObject {
             do {
                 let config = LLMConfig.load()!
                 let writer = SocialCopywriter(client: OpenAIChatClient(config: config))
-                let result = try await writer.generate(from: effectiveText)
+                let result = try await writer.generate(from: effectiveText, persona: socialCopyPersona)
                 await MainActor.run {
                     self.socialCopyResult = result
                     self.showSocialPanel = true

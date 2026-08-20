@@ -87,6 +87,12 @@ public struct EditSession: Sendable, Equatable {
         current.replaceProposed(with: fresh, of: kind)
     }
 
+    /// 不入 undo 栈的直接修改（D-EAS-2：自动断句属"环境准备"，非用户编辑）。
+    /// 用户手动「AI 断句」仍必须走 apply（可撤销）。
+    public mutating func applyWithoutUndo(_ mutate: (inout Snapshot) -> Void) {
+        mutate(&current)
+    }
+
     @discardableResult
     public mutating func undo() -> Bool {
         guard let last = history.popLast() else { return false }

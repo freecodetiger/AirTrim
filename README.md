@@ -20,7 +20,7 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 
 ## 状态
 
-🚧 **Alpha · v0.1.3（M0–M4 全部落地）。** 已可用：
+🚧 **Alpha · v0.1.4（M0–M4 全部落地）。** 已可用：
 
 - 导入口播视频 → **全本地**转写（WhisperKit 多档模型，词级时间戳，中文优化）
 - 逐句编辑器：改错字、拆句/合句、整句试听、当前句跟随高亮
@@ -35,7 +35,7 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 - 设置窗口（⌘,）：AI 服务配置 + 语音模型管理（多模型发现、一键下载推荐档位、校验修复）
 - 应用内模型下载（large-v3 ~3.1 GB，断点续传，国内自动走镜像源）
 
-路线：**M0** ASR 验证（✅）→ **M1** 字幕工具（✅）→ **M2** 一键紧凑（✅）→ **M3** AI 建议闭环（✅）→ **M4** 项目管理 / AI 辅助（✅）。v0.1.3 已发布（DMG 暂为 ad-hoc 签名，公证待 owner 证书，见 [docs/release.md](docs/release.md)）；后续方向见 [docs/roadmap.md](docs/roadmap.md)。
+路线：**M0** ASR 验证（✅）→ **M1** 字幕工具（✅）→ **M2** 一键紧凑（✅）→ **M3** AI 建议闭环（✅）→ **M4** 项目管理 / AI 辅助（✅）。v0.1.4 已发布（DMG 暂为 ad-hoc 签名，公证待 owner 证书，见 [docs/release.md](docs/release.md)）；后续方向见 [docs/roadmap.md](docs/roadmap.md)。
 
 > M0 过程中发现并修复了 WhisperKit 的中文词级时间戳截断 bug（语言检测返回 `zh-Hans` 未命中白名单 `zh`），已向上游提交 [issue #510](https://github.com/argmaxinc/argmax-oss-swift/issues/510) 与 [PR #511](https://github.com/argmaxinc/argmax-oss-swift/pull/511)；合并前应用内置逐字切词兜底。
 

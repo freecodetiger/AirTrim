@@ -14,7 +14,6 @@
 | ASR 转写 · 词级时间戳 → `Transcript` | `SpeechPipeline` | 同上 | — |
 | **时间戳权威值**（`CMTime`） | `SpeechPipeline` 产出，全局只读消费 | — | 代码评审 |
 | 停顿建议 | `PauseAnalyzer` | `Sources/AirTrimCore/Analysis/` | 无 AVFoundation（脚本） |
-| 语气词建议 | `FillerAnalyzer` | 同上 | 同上 |
 | 废话建议（结合全文） | `VerbosityAnalyzer` | 同上 | 同上 |
 | 网络调用 · BYOK Key 管理（Keychain） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` | URLSession 仅此目录（脚本） |
 | **剪辑状态**：`EditList` · suggestion 生命周期 · `TranscriptPatch`（改字/断句修订）· undo | `EditModel` | `Sources/AirTrimCore/EditModel/` | 代码评审 |

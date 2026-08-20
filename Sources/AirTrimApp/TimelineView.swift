@@ -258,7 +258,6 @@ struct TrackAreaView: View {
     static func color(for kind: EditSuggestion.Kind) -> Color {
         switch kind {
         case .pause: .orange
-        case .filler: .blue
         case .verbosity: .purple
         }
     }
@@ -268,8 +267,6 @@ struct TrackAreaView: View {
         switch s.kind {
         case .pause:
             return "停顿 \(String(format: "%.1f", s.originalGap.duration.seconds))s，建议剪 \(saved)s"
-        case .filler:
-            return "语气词「\(s.detail ?? "")」，建议剪 \(saved)s"
         case .verbosity:
             return "\(s.category.map(verbosityLabel) ?? "废话")，建议整句剪 \(saved)s"
         }
@@ -374,24 +371,6 @@ struct TightenBar: View {
 
             Divider().frame(height: 16)
 
-            // 清除语气词（本地词表，即时）
-            Button("清除语气词") { model.runFillerAnalysis() }
-                .disabled(model.transcript?.silences.isEmpty ?? true)
-                .help((model.transcript?.silences.isEmpty ?? true)
-                    ? "波形分析中，稍候再试"
-                    : "本地词表匹配嗯/啊/呃等语气词，即时出建议")
-            if !model.proposedFillers.isEmpty {
-                let savings = model.proposedFillers.reduce(0.0) { $0 + $1.cut.duration.seconds }
-                Text("\(model.proposedFillers.count) 个语气词 · 可省 \(String(format: "%.1f", savings))s")
-                    .font(.caption).foregroundStyle(.blue)
-                Button("全部接受") { model.acceptAllFillers() }
-                    .help("接受全部语气词建议（⌘Z 可整体撤销）")
-            } else if model.lastFillerRunFound == 0 {
-                Text("未发现语气词").font(.caption).foregroundStyle(.secondary)
-            }
-
-            Divider().frame(height: 16)
-
             // 一键生成抖音文案（AI，生成前可切换人设；人设即偏好，切换后持久化）
             if model.socialCopyRunning {
                 ProgressView().controlSize(.small)
@@ -423,12 +402,12 @@ struct TightenBar: View {
 
             Divider().frame(height: 16)
 
-            // 识别废话（LLM，异步可取消；建议永不自动接受）
+            // 一键识别废话（LLM，异步可取消；建议永不自动接受）
             if model.verbosityRunning {
                 ProgressView().controlSize(.small)
                 Button("取消") { model.cancelVerbosityAnalysis() }
             } else {
-                Button("识别废话") { model.requestVerbosityAnalysis() }
+                Button("一键识别废话") { model.requestVerbosityAnalysis() }
                     .help("LLM 通读文字稿找可整句删除的废话（只上传文字，需配置 LLM）")
             }
             if !model.proposedVerbosity.isEmpty {
@@ -569,12 +548,6 @@ struct SuggestionReviewPopover: View {
                       systemImage: "waveform.badge.minus")
                     .font(.callout)
                 Text("保留自然停顿，切点带词边界保护")
-                    .font(.caption).foregroundStyle(.secondary)
-            case .filler:
-                Label("语气词「\(suggestion.detail ?? "")」 · 建议剪掉 \(savedText) 秒",
-                      systemImage: "bubble.left")
-                    .font(.callout)
-                Text("删词后两侧停顿合并，不留双倍空洞；字幕同步剔词")
                     .font(.caption).foregroundStyle(.secondary)
             case .verbosity:
                 Label("\(suggestion.category.map(verbosityLabel) ?? "废话") · 建议整句剪除 \(savedText) 秒",

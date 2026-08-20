@@ -22,7 +22,6 @@
   │                          │
   │                     Analysis（纯函数层）
   │                    ├─ PauseAnalyzer      （本地 · 信号处理）
-  │                    ├─ FillerAnalyzer     （本地 · 词表匹配）
   │                    └─ VerbosityAnalyzer ←─ LLMProvider（BYOK 云端/Ollama，只见文字稿）
   │                          │
   │                    [EditSuggestion]（统一建议格式）
@@ -74,7 +73,6 @@ struct SilenceInterval: Sendable {
 struct EditSuggestion: Identifiable, Sendable {
     enum Kind: Sendable {
         case pause
-        case filler(token: String)
         case verbosity(category: VerbosityCategory, reason: String, confidence: Float)
     }
     enum State: Sendable { case proposed, accepted, rejected }
@@ -101,8 +99,8 @@ struct EditSession: Sendable {         // undo = 快照栈
 
 ### 5.1 建议式编辑（信任模型）
 
-三个分析器全部产出 `EditSuggestion`，UI 一套审阅交互（按类别着色、逐条或按类接受、切点预览跳听）。
-- 停顿 / 语气词：可一键全收（本地确定性高），但同样走 suggestion → accept 流程，可撤销。
+分析器全部产出 `EditSuggestion`，UI 一套审阅交互（按类别着色、逐条或按类接受、切点预览跳听）。
+- 停顿：可一键全收（本地确定性高），但同样走 suggestion → accept 流程，可撤销。
 - 废话（verbosity）：**必须人工确认**。错删一句好内容比留十句废话更伤信任。
 
 ### 5.2 LLM 契约（详见 cut-quality skill）

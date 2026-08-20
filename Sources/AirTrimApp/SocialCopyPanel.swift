@@ -1,7 +1,8 @@
+import AirTrimCore
 import SwiftUI
 
 /// AI 生成社交媒体文案侧边栏：标题 + 配文 + 标签 + 推荐组合。
-/// 每个区块带一键复制按钮。人设选择在工具栏（生成按钮旁），此处仅展示结果。
+/// 每个区块带一键复制按钮。顶部显示当前视频定位（生成时选定）。
 struct SocialCopyPanel: View {
     @EnvironmentObject var model: AppModel
 
@@ -10,6 +11,9 @@ struct SocialCopyPanel: View {
             // 顶部标题栏
             HStack {
                 Label("抖音文案", systemImage: "sparkles").font(.headline)
+                Text("· \(model.socialCopyPersona.displayName)")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(1)
                 Spacer()
                 if model.socialCopyRunning {
                     ProgressView().controlSize(.small)

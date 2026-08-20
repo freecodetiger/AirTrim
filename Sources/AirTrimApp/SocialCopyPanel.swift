@@ -41,12 +41,14 @@ struct SocialCopyPanel: View {
                     Text(error).font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if model.socialCopyRunning {
                 VStack(spacing: 12) {
                     ProgressView()
                     Text("正在分析字幕并生成文案…").font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let result = model.socialCopyResult {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 0) {
@@ -62,6 +64,7 @@ struct SocialCopyPanel: View {
                     Text("点击工具栏「抖音文案」生成").font(.caption).foregroundStyle(.secondary)
                 }
                 .padding(24)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
         .frame(minWidth: 300)

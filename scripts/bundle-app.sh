@@ -44,11 +44,21 @@ cat > "${PLIST}" <<'PLISTEOF'
     <true/>
     <key>NSPrincipalClass</key>
     <string>NSApplication</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
 </dict>
 </plist>
 PLISTEOF
 
 # 写入真实 executable 名
 sed -i '' "s/PLACEHOLDER_EXEC/${APP_NAME}/" "${PLIST}"
+
+# 图标：assets/app-icon-source.png → build/icon/AppIcon.icns（首次生成），拷入 bundle
+if [[ ! -f build/icon/AppIcon.icns ]]; then
+  swift scripts/make-icon.swift build/icon
+  iconutil -c icns build/icon/AppIcon.iconset -o build/icon/AppIcon.icns
+fi
+mkdir -p "${BUNDLE_ROOT}/Contents/Resources"
+cp build/icon/AppIcon.icns "${BUNDLE_ROOT}/Contents/Resources/AppIcon.icns"
 
 echo "✅ ${BUNDLE_ROOT}"

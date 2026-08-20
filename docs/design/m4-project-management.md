@@ -7,7 +7,7 @@
 
 ## 1. 背景与现状
 
-- 当前单 WindowGroup + `AppModel.stage` 状态机路由：`.needsModel` → SetupView、
+- 当前单 WindowGroup + `AppModel.stage` 状态机路由：`.environmentSetup` → 环境准备页、
   `.idle` → ImportView、`.transcribing` → 进度页、`.editor` → 编辑器、
   `.failed` → 错误页。
 - ProjectStore 以指纹（SHA256(path|size|mtime)）为键，把转写结果 + 修订补丁
@@ -25,7 +25,7 @@
 首屏。**取消启动时自动恢复上次项目的行为**——多项目场景下"启动即进编辑器"
 反而抢走选择权；上次项目降级为项目管理页的"继续上次"**置顶卡片**，一次点击
 即达，老用户成本仅 +1 击。`AIRTRIM_AUTOLOAD` 环境变量自动加载**保留**
-（自动化冒烟/回归钩子，不走首屏）。模型下载引导（`.needsModel` → SetupView）
+（自动化冒烟/回归钩子，不走首屏）。环境准备门槛（`.environmentSetup` → 环境准备页：语音模型 + LLM 双就绪，D-EAS-1）
 仍然优先于一切，顺序不可改。
 
 ### D-M4-2 · 数据层最小扩展（ProjectStore 只加只读扫描 + 删除）

@@ -46,6 +46,7 @@ struct RootView: View {
         case .environmentSetup: EnvironmentSetupView()
         case .idle: ProjectHomeView()
         case .transcribing(let name, let start): TranscribingView(fileName: name, startedAt: start)
+        case .preparing: PreparingView()
         case .editor: EditorView()
         case .failed(let message): FailedView(message: message)
         }
@@ -356,6 +357,23 @@ struct TranscribingView: View {
             TimelineView(.periodic(from: startedAt, by: 1)) { context in
                 Text("已用 \(Int(context.date.timeIntervalSince(startedAt))) 秒 · 全程离线")
                     .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+}
+
+/// 进入编辑器前的自动断句准备界面（D-EAS-3 不允许跳过；失败回落原生断句后进编辑器）。
+struct PreparingView: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(spacing: 14) {
+            ProgressView().controlSize(.large)
+            Text("正在准备编辑环境…").font(.title3)
+            if let p = model.aiSegmentProgress {
+                Text("正在语义断句 \(p.completed)/\(p.total)…")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

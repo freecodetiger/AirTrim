@@ -15,6 +15,8 @@ final class AppModel: ObservableObject {
         case environmentSetup
         case idle
         case transcribing(fileName: String, startedAt: Date)
+        /// 转写完成 → 进编辑器前：自动语义断句（D-EAS-2/3）
+        case preparing
         case editor
         case failed(String)
     }
@@ -287,8 +289,13 @@ final class AppModel: ObservableObject {
             waveformPeaks = doc.waveformPeaks
             setupPlayer(url: url)
             refreshDerived()
-            stage = .editor
-            rerunPauseAnalysis()
+            if doc.aiSegmentedAt == nil {
+                // 未断过句：进编辑器前先自动断句（D-EAS-3 不允许跳过；失败回落原生断句）
+                segmentForEntry(url: url)
+            } else {
+                stage = .editor
+                rerunPauseAnalysis()
+            }
             backfillDerivedAudioIfNeeded(url: url)
             return
         }
@@ -316,10 +323,8 @@ final class AppModel: ObservableObject {
                 self.waveformPeaks = WaveformPeaks.compute(samples: pcm)
                 self.setupPlayer(url: url)
                 self.refreshDerived()
-                self.stage = .editor
-                self.rerunPauseAnalysis()
-                ProjectStore.save(source: url, transcript: result, snapshot: self.session.current,
-                                  waveformPeaks: self.waveformPeaks)
+                // 进编辑器前自动断句（.preparing → .editor），由 segmentForEntry/finishEntry 收尾并存盘
+                self.segmentForEntry(url: url)
             } catch let error as MediaEngineError {
                 self.stage = .failed(error.localizedDescription)
             } catch {
@@ -327,6 +332,59 @@ final class AppModel: ObservableObject {
                 self.stage = .failed("转写失败：\(error.localizedDescription)\n若模型文件不完整，可在「设置 → 模型」重新下载校验。")
             }
         }
+    }
+
+    /// 进入编辑器前的自动断句（D-EAS-2 不入 undo；D-EAS-3 不允许跳过，失败回落原生断句）。
+    /// `.preparing` → 断句 → `finishEntry`（.editor + 存盘 + 停顿分析）。
+    private func segmentForEntry(url: URL) {
+        guard let transcript, let config = LLMConfig.load() else {
+            finishEntry(url: url)   // 环境门槛保证理论到不了这里；防御兜底
+            return
+        }
+        stage = .preparing
+        aiSegmenting = true
+        aiSegmentProgress = nil
+        lastSegmentationResult = nil
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let segmenter = SemanticSegmenter(client: OpenAIChatClient(config: config))
+                let result = try await segmenter.proposeSentenceStarts(for: transcript) { completed, total, _ in
+                    Task { @MainActor [weak self] in
+                        self?.aiSegmentProgress = (completed, total)
+                    }
+                }
+                await MainActor.run {
+                    self.session.applyWithoutUndo { $0.patch.sentenceStarts = result.sentenceStarts }
+                    self.lastSegmentationResult = result.hasFailures ? result : nil
+                    self.aiSegmentProgress = nil
+                    self.aiSegmenting = false
+                    self.refreshDerived()
+                    self.finishEntry(url: url, aiSegmentedAt: Date())
+                }
+            } catch {
+                await MainActor.run {
+                    self.aiSegmenting = false
+                    self.aiSegmentProgress = nil
+                    self.aiError = error.localizedDescription   // 进编辑器后非阻断提示
+                    self.finishEntry(url: url)                  // 失败不硬阻塞，回落原生断句
+                }
+            }
+        }
+    }
+
+    /// 进入编辑器收尾：stage 置 .editor + 停顿分析 + 存盘（含断句标记）。
+    private func finishEntry(url: URL, aiSegmentedAt: Date? = nil) {
+        guard let transcript else {
+            stage = .failed("缺少转写结果")
+            return
+        }
+        stage = .editor
+        rerunPauseAnalysis()
+        ProjectStore.save(source: url, transcript: transcript,
+                          snapshot: session.current,
+                          waveformPeaks: waveformPeaks,
+                          aiSegmentedAt: aiSegmentedAt)
     }
 
     /// v1 缓存补挂派生音频数据：silences（M2 分析输入）+ 波形峰值。

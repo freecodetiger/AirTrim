@@ -14,6 +14,8 @@ struct ProjectDocument: Codable {
     var edits: EditList?
     var suggestions: [EditSuggestion]?
     var waveformPeaks: [Float]?
+    /// M5：已执行语义断句的时间（进入编辑器前自动断句，D-EAS-2/3）；nil = 未断过
+    var aiSegmentedAt: Date?
 }
 
 /// 项目管理页列表项（M4）：从缓存 JSON 解出的只读元数据快照。
@@ -69,14 +71,16 @@ enum ProjectStore {
     }
 
     static func save(source: URL, transcript: Transcript, snapshot: EditSession.Snapshot,
-                     waveformPeaks: [Float]? = nil) {
+                     waveformPeaks: [Float]? = nil, aiSegmentedAt: Date? = nil) {
         guard let fp = fingerprint(of: source) else { return }
-        // 峰值只在显式提供时覆盖，否则保留已存的（避免每次修订都丢波形）
-        let peaks = waveformPeaks ?? load(for: source)?.waveformPeaks
+        // 峰值/断句标记只在显式提供时覆盖，否则保留已存的（避免每次修订丢派生状态）
+        let previous = load(for: source)
+        let peaks = waveformPeaks ?? previous?.waveformPeaks
+        let segDate = aiSegmentedAt ?? previous?.aiSegmentedAt
         let doc = ProjectDocument(sourcePath: source.path, fingerprint: fp,
                                   transcript: transcript, patch: snapshot.patch, savedAt: Date(),
                                   edits: snapshot.edits, suggestions: snapshot.suggestions,
-                                  waveformPeaks: peaks)
+                                  waveformPeaks: peaks, aiSegmentedAt: segDate)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         if let data = try? JSONEncoder().encode(doc) {
             try? data.write(to: fileURL(fingerprint: fp), options: .atomic)

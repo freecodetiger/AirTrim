@@ -59,6 +59,18 @@ struct EditSuggestionM3Tests {
         #expect(snapshot.suggestions.filter { $0.kind == .verbosity }.map(\.cut) == [r(5, 6)])
     }
 
+    @Test("applyWithoutUndo 不入 undo 栈（D-EAS-2 自动断句）")
+    func applyWithoutUndoDoesNotPushHistory() {
+        var session = EditSession()
+        session.applyWithoutUndo { $0.patch.sentenceStarts = [5, 10] }
+        #expect(session.current.patch.sentenceStarts == [5, 10])
+        #expect(session.history.isEmpty)
+        #expect(session.canUndo == false)
+        // 对照：手动断句仍走 apply，入 undo
+        session.apply { $0.patch.sentenceStarts = [3] }
+        #expect(session.canUndo)
+    }
+
     @Test("M3 新字段编解码往返；缺省字段解码为 nil（M2 档兼容）")
     func codableRoundTripAndBackwardCompat() throws {
         let full = EditSuggestion(kind: .verbosity, cut: r(1, 2), originalGap: r(1, 2),

@@ -5,7 +5,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONF="${1:-release}"
-VERSION="${2:-0.1.2}"
+VERSION="${2:-0.1.3}"
 swift build -c "$CONF" --product AirTrimApp
 
 APP=build/AirTrim.app

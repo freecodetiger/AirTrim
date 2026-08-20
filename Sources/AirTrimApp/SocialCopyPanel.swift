@@ -1,15 +1,43 @@
+import AirTrimCore
 import SwiftUI
 
 /// AI 生成社交媒体文案侧边栏：标题 + 配文 + 标签 + 推荐组合。
-/// 每个区块带一键复制按钮。
+/// 每个区块带一键复制按钮。顶部可选人设（SocialCopyPersona）。
 struct SocialCopyPanel: View {
     @EnvironmentObject var model: AppModel
+
+    /// 本地关键词推荐的人设（仅用于 Picker 角标与默认值，不覆盖已保存选择）
+    private var suggestedPersona: SocialCopyPersona? { model.suggestedPersona() }
+
+    private var personaIDBinding: Binding<String> {
+        Binding(
+            get: { model.socialCopyPersona.id },
+            set: { id in
+                if let p = SocialCopyPersona.all.first(where: { $0.id == id }) {
+                    model.setPersona(p)
+                }
+            }
+        )
+    }
 
     var body: some View {
         VStack(spacing: 0) {
             // 顶部标题栏
             HStack {
                 Label("抖音文案", systemImage: "sparkles").font(.headline)
+                Picker("人设", selection: personaIDBinding) {
+                    ForEach(SocialCopyPersona.all) { persona in
+                        Text(persona.id == suggestedPersona?.id
+                             ? "\(persona.displayName)（推荐）"
+                             : persona.displayName)
+                            .tag(persona.id)
+                    }
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .controlSize(.small)
+                .frame(maxWidth: 150)
+                .help(suggestedPersona.map { "推荐人设：\($0.displayName)" } ?? "选择文案人设赛道")
                 Spacer()
                 if model.socialCopyRunning {
                     ProgressView().controlSize(.small)

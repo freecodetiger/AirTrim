@@ -39,10 +39,10 @@
 
 ## 验收结果（2026-08-21 · `results/koubo-01-funasr-cloud.md`）
 
-- 测到：`qwen-audio-3.0-asr-flash`（`fun-asr-flash` 模型名不存在；`paraformer-realtime-v2` 需 URL）。
-- **未达标**：VAD 融合后中位 50ms ✅、P95 217ms ❌（>200ms）。根因是**词级粒度吞词内边界**（「这个问题」「一个孩子」4 字词并成单词，中间边界丢失），非漂移（VAD 融合无效，13/124 词吸附后 P95 不变）。
-- **未测到**：逐字 Paraformer（`paraformer-v2`/`fun-asr`）需 OSS 异步或 WebSocket，属产品接入阶段工程，本 spike 未覆盖——其逐字输出大概率不吞词内边界，但未经本项目口径验证。
-- **结论（per 决策 #6）**：云端 flash 模型边界精度未过线，**不进入 App 接入**；本地 WhisperKit 默认路径不变。逐字 Paraformer 的 OSS 异步评测列为后续评估项（通过才重审本 ADR 的接入条件）。
+- **`paraformer-v2`（异步 · 逐字时间戳）：过线 ✅**。VAD 融合后中位 **30ms**、P95 **74.5ms**、最大 130ms、CER 5.6%、RTF 0.12（209.9s 全片）。逐字粒度（每字独立时间戳），无需融合也能过线（raw 35/80.9ms）。**云端 ASR 接入条件成立。**
+- **`qwen-audio-3.0-asr-flash`（同步 · 词级）：未达标 ❌**（中位 50ms / P95 217ms）。根因是词级粒度吞词内边界（「这个问题」「一个孩子」4 字词并成单词），非漂移；不进入接入。
+- **免 OSS 前提**：异步 `file_urls` 收 base64 data URI（≤~10MB 验证通过）；1h+ 长视频需 OSS URL 或实时 websocket——产品接入阶段的开放项（决策「开放项」）。
+- **结论（per 决策 #6）**：逐字 Paraformer 过线 → 重审接入条件成立；flash 词级模型弃用。是否进入 App 接入（`ASRProvider` + `CloudASRTranscriber`）由产品决策（音频上云的隐私姿态变化）。
 
 ## 后果
 

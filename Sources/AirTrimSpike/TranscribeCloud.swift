@@ -26,6 +26,9 @@ struct TranscribeCloud: AsyncParsableCommand {
     @Option(help: "只转写前 N 秒（0 = 全片；truth 标注只覆盖前 64s，默认 70 避免 API 时长上限）")
     var maxSeconds: Double = 70
 
+    @Flag(help: "异步录音文件识别路径（paraformer-v2 / fun-asr；逐字时间戳，需 timestamp_alignment_enabled）")
+    var async: Bool = false
+
     @Option(help: "输出 JSON 路径")
     var output: String
 
@@ -54,8 +57,13 @@ struct TranscribeCloud: AsyncParsableCommand {
             duration, Double(wav.count) / 1_048_576, Double(dataURI.count) / 1_048_576).utf8))
 
         let t0 = Date()
-        let (text, words) = try await Self.dashscopeTranscribe(key: key, model: model,
-                                                                dataURI: dataURI, endpoint: endpoint)
+        let (text, words): (String, [SpikeWord])
+        if async {
+            (text, words) = try await Self.dashscopeAsyncTranscribe(key: key, model: model, dataURI: dataURI)
+        } else {
+            (text, words) = try await Self.dashscopeTranscribe(key: key, model: model,
+                                                               dataURI: dataURI, endpoint: endpoint)
+        }
         let elapsed = Date().timeIntervalSince(t0)
 
         let transcript = SpikeTranscript(
@@ -121,6 +129,105 @@ struct TranscribeCloud: AsyncParsableCommand {
             ?? (output["text"] as? String)
             ?? words.map(\.text).joined()
         return (text, words)
+    }
+
+    /// 调 DashScope 异步录音文件识别：提交 → 轮询 `GET /api/v1/tasks/{id}` → 下载 `transcription_url` 结果。
+    /// paraformer-v2 为**逐字**时间戳（默认关闭，需 `timestamp_alignment_enabled: true`）；`file_urls` 收 base64 data URI，免 OSS。
+    /// 参考：help.aliyun.com/en/model-studio/fun-asr-recorded-speech-recognition-http-api
+    static func dashscopeAsyncTranscribe(key: String, model: String,
+                                         dataURI: String) async throws -> (String, [SpikeWord]) {
+        let baseURL = "https://dashscope.aliyuncs.com"
+
+        var submit = URLRequest(url: URL(string: baseURL + "/api/v1/services/audio/asr/transcription")!)
+        submit.httpMethod = "POST"
+        submit.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+        submit.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        submit.setValue("enable", forHTTPHeaderField: "X-DashScope-Async")
+        var parameters: [String: Any] = [:]
+        if model.hasPrefix("paraformer") {   // fun-asr 时间戳常开；paraformer 需显式开启
+            parameters["timestamp_alignment_enabled"] = true
+            parameters["language_hints"] = ["zh"]
+        }
+        submit.httpBody = try JSONSerialization.data(withJSONObject: [
+            "model": model,
+            "input": ["file_urls": [dataURI]],
+            "parameters": parameters,
+        ])
+        submit.timeoutInterval = 300
+
+        let (submitData, submitResp) = try await URLSession.shared.data(for: submit)
+        guard let submitHTTP = submitResp as? HTTPURLResponse, submitHTTP.statusCode == 200,
+              let sj = try JSONSerialization.jsonObject(with: submitData) as? [String: Any],
+              let taskID = (sj["output"] as? [String: Any])?["task_id"] as? String else {
+            throw NSError(domain: "TranscribeCloud", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "提交失败：HTTP \((submitResp as? HTTPURLResponse)?.statusCode ?? -1)：\(String(data: submitData, encoding: .utf8) ?? "")"])
+        }
+        FileHandle.standardError.write(Data("异步任务已提交：\(taskID)，轮询中…\n".utf8))
+
+        let taskURL = URL(string: baseURL + "/api/v1/tasks/" + taskID)!
+        var transcriptionURL: URL?
+        for _ in 0..<120 {   // 最长 ~10min
+            try await Task.sleep(nanoseconds: 5_000_000_000)
+            var query = URLRequest(url: taskURL)
+            query.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization")
+            query.timeoutInterval = 60
+            guard let (qData, qResp) = try? await URLSession.shared.data(for: query),
+                  let qhttp = qResp as? HTTPURLResponse, qhttp.statusCode == 200,
+                  let qj = try? JSONSerialization.jsonObject(with: qData) as? [String: Any],
+                  let qo = qj["output"] as? [String: Any] else { continue }
+            let status = qo["task_status"] as? String ?? ""
+            if status == "SUCCEEDED" {
+                transcriptionURL = Self.extractTranscriptionURL(qo)
+                break
+            }
+            if status == "FAILED" || status == "UNKNOWN" {
+                throw NSError(domain: "TranscribeCloud", code: 5,
+                              userInfo: [NSLocalizedDescriptionKey: "任务失败：\(status)"])
+            }
+        }
+        guard let transcriptionURL else {
+            throw NSError(domain: "TranscribeCloud", code: 6,
+                          userInfo: [NSLocalizedDescriptionKey: "轮询超时（10min）"])
+        }
+
+        var dl = URLRequest(url: transcriptionURL)
+        dl.timeoutInterval = 120
+        let (rData, rResp) = try await URLSession.shared.data(for: dl)
+        guard (rResp as? HTTPURLResponse)?.statusCode == 200,
+              let rj = try JSONSerialization.jsonObject(with: rData) as? [String: Any],
+              let transcripts = rj["transcripts"] as? [[String: Any]],
+              let tr = transcripts.first else {
+            throw NSError(domain: "TranscribeCloud", code: 7,
+                          userInfo: [NSLocalizedDescriptionKey: "结果解析失败：\(String(data: rData, encoding: .utf8) ?? "")"])
+        }
+
+        let text = tr["text"] as? String ?? ""
+        let sentences = tr["sentences"] as? [[String: Any]] ?? []
+        let words = sentences.flatMap { s -> [SpikeWord] in
+            guard let wordArr = s["words"] as? [[String: Any]] else { return [] }
+            return wordArr.compactMap { w -> SpikeWord? in
+                guard let text = w["text"] as? String,
+                      let b = Self.ms(w["begin_time"]), let e = Self.ms(w["end_time"]) else { return nil }
+                let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !t.isEmpty else { return nil }
+                return SpikeWord(text: t, start: Double(b) / 1000.0, end: Double(e) / 1000.0)
+            }
+        }
+        return (text, words)
+    }
+
+    /// 从任务结果里取出转录结果下载 URL（嵌套路径 `results[].output.results[].transcription_url`）。
+    private static func extractTranscriptionURL(_ output: [String: Any]) -> URL? {
+        let results = output["results"] as? [[String: Any]] ?? []
+        guard let first = results.first else { return nil }
+        if let inner = (first["output"] as? [String: Any])?["results"] as? [[String: Any]],
+           let url = inner.first?["transcription_url"] as? String {
+            return URL(string: url)
+        }
+        if let url = (first["output"] as? [String: Any])?["transcription_url"] as? String {
+            return URL(string: url)
+        }
+        return nil
     }
 
     /// JSON 数字统一取毫秒整数（兼容 Int / Double 两种解析）。

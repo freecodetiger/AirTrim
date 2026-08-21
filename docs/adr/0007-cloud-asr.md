@@ -37,6 +37,13 @@
 - 整体偏移 → `vad_offset` / `force_time_shift` 补偿（与 Whisper 词首 -230ms 同类，但为可调固定偏移）。
 - 词级非逐字粒度 → spike 判定。
 
+## 验收结果（2026-08-21 · `results/koubo-01-funasr-cloud.md`）
+
+- 测到：`qwen-audio-3.0-asr-flash`（`fun-asr-flash` 模型名不存在；`paraformer-realtime-v2` 需 URL）。
+- **未达标**：VAD 融合后中位 50ms ✅、P95 217ms ❌（>200ms）。根因是**词级粒度吞词内边界**（「这个问题」「一个孩子」4 字词并成单词，中间边界丢失），非漂移（VAD 融合无效，13/124 词吸附后 P95 不变）。
+- **未测到**：逐字 Paraformer（`paraformer-v2`/`fun-asr`）需 OSS 异步或 WebSocket，属产品接入阶段工程，本 spike 未覆盖——其逐字输出大概率不吞词内边界，但未经本项目口径验证。
+- **结论（per 决策 #6）**：云端 flash 模型边界精度未过线，**不进入 App 接入**；本地 WhisperKit 默认路径不变。逐字 Paraformer 的 OSS 异步评测列为后续评估项（通过才重审本 ADR 的接入条件）。
+
 ## 后果
 
 - ✅ 弱机 / 未下载本地模型时仍有可用转写；中文时间戳候选增强（B 计划转正评估）。

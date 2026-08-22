@@ -447,9 +447,9 @@ final class AppModel: ObservableObject {
         case (.cloud, .uploading):
             transcribePhaseText = "上传音频，云端转写中…"
             transcribeFraction = nil
-        case (.cloud, .transcribing):
-            transcribePhaseText = "云端转写完成"
-            transcribeFraction = nil
+        case (.cloud, .transcribing(let fraction)):
+            transcribePhaseText = fraction >= 1 ? "云端转写完成" : "云端转写中…"
+            transcribeFraction = fraction
         case (_, .loadingModel):
             transcribePhaseText = "加载模型…（约十几秒）"
             transcribeFraction = nil

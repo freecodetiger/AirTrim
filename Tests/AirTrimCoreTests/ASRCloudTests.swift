@@ -115,3 +115,38 @@ struct WAVEncoderTests {
         #expect(wav[12..<16] == Data("fmt ".utf8))
     }
 }
+
+@Suite("CloudASRTranscriber：分段切块（任意时长）")
+struct CloudASRChunkTests {
+    private func sil(_ s: Double, _ e: Double) -> SilenceInterval {
+        SilenceInterval(start: CMTime(seconds: s, preferredTimescale: 16000),
+                        end: CMTime(seconds: e, preferredTimescale: 16000), peakEnergy: 0)
+    }
+
+    @Test func hardCutsWithoutSilences() {
+        let ranges = CloudASRTranscriber.chunkRanges(
+            silences: [], sampleCount: 400 * 16000, sampleRate: 16000,
+            target: 180, max: 210, minTail: 30)
+        #expect(ranges.count == 3)
+        #expect(ranges[0].count == 180 * 16000)
+        #expect(ranges[1].count == 180 * 16000)
+        #expect(ranges[2].count == 40 * 16000)
+    }
+
+    @Test func cutsAtSilenceMidpointNearTarget() {
+        let ranges = CloudASRTranscriber.chunkRanges(
+            silences: [sil(176, 178)], sampleCount: 380 * 16000, sampleRate: 16000,
+            target: 180, max: 210, minTail: 30)
+        #expect(ranges[0].count == 177 * 16000)   // 切在 176–178s 静音中点，不切词
+        #expect(ranges[1].lowerBound == 177 * 16000)
+        #expect(ranges[1].count <= 210 * 16000)   // 并入尾段后仍不超硬上限
+    }
+
+    @Test func mergesTinyTailIntoPrevious() {
+        let ranges = CloudASRTranscriber.chunkRanges(
+            silences: [], sampleCount: 200 * 16000, sampleRate: 16000,
+            target: 180, max: 210, minTail: 30)
+        #expect(ranges.count == 1)               // 20s 尾段并入 → 单段
+        #expect(ranges[0].count == 200 * 16000)
+    }
+}

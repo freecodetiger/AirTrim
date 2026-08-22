@@ -15,7 +15,8 @@
 | **时间戳权威值**（`CMTime`） | `SpeechPipeline` 产出，全局只读消费 | — | 代码评审 |
 | 停顿建议 | `PauseAnalyzer` | `Sources/AirTrimCore/Analysis/` | 无 AVFoundation（脚本） |
 | 废话建议（结合全文） | `VerbosityAnalyzer` | 同上 | 同上 |
-| 网络调用 · BYOK Key 管理（Keychain） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` | URLSession 仅此目录（脚本） |
+| 网络调用 · LLM 文字稿（BYOK，Key 存 llm-config.json 明文） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` | URLSession 仅此目录 + `ASRProvider/`（脚本） |
+| 云端 ASR 客户端 · 音频上云 · 词级时间戳拉取 | `ASRProvider` | `Sources/AirTrimCore/ASRProvider/` | 同上（ADR-0007） |
 | **剪辑状态**：`EditList` · suggestion 生命周期 · `TranscriptPatch`（改字/断句修订）· undo | `EditModel` | `Sources/AirTrimCore/EditModel/` | 代码评审 |
 | 字幕条生成（Transcript+Patch → cues → SRT 文本） | `Subtitles` | `Sources/AirTrimCore/Subtitles/` | 无 AVFoundation（脚本） |
 | UI 全部 | `AirTrimApp` | `Sources/AirTrimApp/` | Core 无 SwiftUI/AppKit（脚本） |
@@ -28,8 +29,8 @@ AirTrimApp（SwiftUI/AppKit · UI）
 AirTrimCore
    ├── 纯值类型层：EditModel · Analysis        ← 无系统框架依赖（CoreMedia 除外）
    └── 适配层：    MediaEngine（AVFoundation）
-                   SpeechPipeline（ASR/VAD 模型）
-                   LLMProvider（URLSession · 唯一联网点）
+                   SpeechPipeline（ASR/VAD 模型 · 本地默认 + 云端可选）
+                   LLMProvider / ASRProvider（URLSession · 仅此两处联网）
 ```
 
 - 依赖只能向下：App → Core；适配层可以消费纯值类型层，反向禁止。

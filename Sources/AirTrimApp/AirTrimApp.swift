@@ -45,6 +45,7 @@ struct RootView: View {
         switch model.stage {
         case .environmentSetup: EnvironmentSetupView()
         case .idle: ProjectHomeView()
+        case .choosingEngine(let url): EngineChoiceView(url: url)
         case .transcribing(let name, let start): TranscribingView(fileName: name, startedAt: start)
         case .preparing: PreparingView()
         case .editor: EditorView()
@@ -62,17 +63,20 @@ struct EnvironmentSetupView: View {
             VStack(alignment: .leading, spacing: 24) {
                 VStack(alignment: .leading, spacing: 6) {
                     Text("环境准备").font(.title2.bold())
-                    Text("就绪后才能进入剪辑工作流。本地转写不上传任何音视频；AI 功能只上传文字稿。")
+                    Text("就绪后才能进入剪辑工作流。转写默认本地（不上传音视频）；可选云端转写（DashScope，音频仅此一处上云）。")
                         .font(.callout).foregroundStyle(.secondary)
                 }
 
-                // ① 语音模型
+                // ① 语音模型 / 云端转写（任一就绪即可，ADR-0007）
                 VStack(alignment: .leading, spacing: 10) {
                     HStack {
-                        Label("语音模型", systemImage: "waveform").font(.headline)
+                        Label("语音模型 / 云端转写", systemImage: "waveform").font(.headline)
                         Spacer()
                         if model.modelFolder != nil {
-                            Label("就绪", systemImage: "checkmark.circle.fill")
+                            Label("本地模型就绪", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green).font(.callout)
+                        } else if ASRConfig.isConfigured {
+                            Label("云端转写就绪", systemImage: "checkmark.circle.fill")
                                 .foregroundStyle(.green).font(.callout)
                         }
                     }
@@ -83,7 +87,16 @@ struct EnvironmentSetupView: View {
                                 .font(.caption).foregroundStyle(.secondary).lineLimit(1)
                         }
                     } else if model.modelFolder == nil {
-                        Button("下载模型（3.1 GB）") { model.downloadModel() }
+                        if ASRConfig.isConfigured {
+                            Text("已启用云端转写（DashScope）。本地模型可跳过下载；需要离线转写时再装。")
+                                .font(.callout).foregroundStyle(.secondary)
+                        } else {
+                            Text("二选一即可：")
+                                .font(.callout).foregroundStyle(.secondary)
+                            Button("下载本地模型（3.1 GB）") { model.downloadModel() }
+                            Button("配置云端转写（DashScope）…") { SettingsWindowManager.open(model: model) }
+                                .buttonStyle(.link)
+                        }
                         if let error = model.installError {
                             Text(error).font(.caption).foregroundStyle(.red)
                             Button("重试（从断点继续）") { model.downloadModel() }
@@ -197,6 +210,7 @@ struct ProjectHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                environmentStatusBar
                 importArea
                 if let last = lastOpened {
                     section("继续上次") {
@@ -232,6 +246,16 @@ struct ProjectHomeView: View {
         }
         .onAppear { model.loadProjects() }
         .navigationTitle("AirTrim")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    SettingsWindowManager.open(model: model)
+                } label: {
+                    Label("设置", systemImage: "gearshape")
+                }
+                .help("AI 服务 · 云端转写 · 模型管理")
+            }
+        }
         // 删除缓存需确认（P1）；只删 JSON，源文件永远不动
         .confirmationDialog(
             "删除「\(pendingDelete?.fileName ?? "")」的项目缓存？",
@@ -261,6 +285,38 @@ struct ProjectHomeView: View {
     private func open(_ project: ProjectMetadata) {
         guard project.sourceExists else { missingSource = project; return }
         model.start(url: project.sourceURL)
+    }
+
+    /// 首屏环境状态提示：转写引擎（本地模型/云端转写）与 LLM 的就绪情况 + 入口。
+    private var environmentStatusBar: some View {
+        HStack(spacing: 10) {
+            if model.environmentReady {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("环境就绪").font(.callout.weight(.medium))
+                Text(environmentDetail)
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("环境未就绪").font(.callout.weight(.medium))
+                Text(environmentDetail)
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("去准备…") { model.stage = .environmentSetup }
+                    .buttonStyle(.link)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+    }
+
+    private var environmentDetail: String {
+        let asr = model.modelFolder != nil
+            ? "本地模型"
+            : (ASRConfig.isConfigured ? "云端转写" : "无转写引擎")
+        let llm = LLMConfig.isConfigured ? "LLM 就绪" : "LLM 未配置"
+        return "\(asr) · \(llm)"
     }
 
     private var importArea: some View {
@@ -336,6 +392,62 @@ struct ProjectRowView: View {
     }
 }
 
+/// 转写引擎选择页：每次新转写前必选（本地 / 云端），隐私说明随引擎明示（ADR-0007）。
+struct EngineChoiceView: View {
+    @EnvironmentObject var model: AppModel
+    let url: URL
+
+    var body: some View {
+        VStack(spacing: 20) {
+            Text("选择转写方式").font(.title2.bold())
+            Text("将在所选引擎上转写「\(url.lastPathComponent)」")
+                .font(.callout).foregroundStyle(.secondary)
+
+            Button { model.start(url: url, engine: .local) } label: {
+                engineCard(label: "本地转写", icon: "cpu",
+                           note: "WhisperKit · 完全离线，音视频不上传")
+            }
+            .buttonStyle(.plain)
+            .disabled(model.modelFolder == nil)
+
+            Button { model.start(url: url, engine: .cloud) } label: {
+                engineCard(label: "云端转写", icon: "cloud",
+                           note: "DashScope paraformer · 音频将上传阿里云，仅此一处上云（BYOK）")
+            }
+            .buttonStyle(.plain)
+            .disabled(!ASRConfig.isConfigured)
+
+            if model.modelFolder == nil {
+                Text("本地转写未就绪：未安装语音模型。").font(.caption).foregroundStyle(.secondary)
+            }
+            if !ASRConfig.isConfigured {
+                HStack(spacing: 8) {
+                    Text("云端转写未就绪：未配置 DashScope Key。").font(.caption).foregroundStyle(.secondary)
+                    Button("去设置…") { SettingsWindowManager.open(model: model) }
+                        .buttonStyle(.link)
+                }
+            }
+            Button("取消") { model.stage = .idle }
+        }
+        .padding(32)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private func engineCard(label: String, icon: String, note: String) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: icon).font(.title3).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label).font(.headline)
+                Text(note).font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer()
+        }
+        .padding(16)
+        .frame(maxWidth: 460)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.08)))
+    }
+}
+
 struct TranscribingView: View {
     @EnvironmentObject var model: AppModel
     let fileName: String
@@ -355,7 +467,7 @@ struct TranscribingView: View {
             Text(model.transcribePhaseText)
                 .font(.caption).foregroundStyle(.secondary)
             TimelineView(.periodic(from: startedAt, by: 1)) { context in
-                Text("已用 \(Int(context.date.timeIntervalSince(startedAt))) 秒 · 全程离线")
+                Text("已用 \(Int(context.date.timeIntervalSince(startedAt))) 秒 · \(model.activeEngine == .cloud ? "云端转写（音频上云）" : "全程离线")")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }

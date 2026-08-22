@@ -17,8 +17,8 @@
   ├─ MediaEngine ──── 解码 · 抽取音频 PCM
   │                          │
   │                    SpeechPipeline
-  │                    ├─ VAD → [SilenceInterval]
-  │                    └─ ASR → Transcript（词级时间戳，不可变快照）
+  │                    ├─ VAD → [SilenceInterval]（本地）
+  │                    └─ ASR → Transcript（词级时间戳，本地 WhisperKit / 云端 DashScope 可选，ADR-0007）
   │                          │
   │                     Analysis（纯函数层）
   │                    ├─ PauseAnalyzer      （本地 · 信号处理）
@@ -38,9 +38,10 @@
 | 模块 | 类型 | 职责 |
 |---|---|---|
 | `MediaEngine` | 系统框架适配层 | AVAsset 解码、音频 PCM 抽取、`AVMutableComposition` 预览拼装、`AVAssetExportSession` 导出、字幕烧录。唯一允许操作 AVFoundation 可变对象的模块。 |
-| `SpeechPipeline` | 系统框架/模型适配层 | VAD（静音区间）+ ASR（词级时间戳）→ `Transcript`。时间戳的唯一来源。 |
+| `SpeechPipeline` | 系统框架/模型适配层 | VAD（静音区间）+ ASR（词级时间戳）→ `Transcript`。时间戳的唯一来源。本地 WhisperKit 为默认 + 离线兜底；云端引擎走 `ASRProvider`（ADR-0007）。 |
 | `Analysis` | 纯值类型层 | 三个分析器，纯函数：`(Transcript, [SilenceInterval], 配置) → [EditSuggestion]`。不 import AVFoundation。 |
-| `LLMProvider` | 网络适配层 | BYOK provider 协议（Claude / OpenAI / DeepSeek / Ollama）。整个 Core 唯一允许联网的模块；只发送文字稿。 |
+| `LLMProvider` | 网络适配层 | BYOK provider 协议（Claude / OpenAI / DeepSeek / Ollama）。联网只发送文字稿。 |
+| `ASRProvider` | 网络适配层 | 云端 ASR 客户端（DashScope Fun-ASR，BYOK）。Core 内唯一允许上传音频的模块（ADR-0007）。 |
 | `EditModel` | 纯值类型层 | `EditList`、suggestion 生命周期、undo（快照栈）。剪辑状态唯一真相源。 |
 | `AirTrimApp` | UI | 文字稿编辑器（主界面）、波形时间线（辅助）、建议审阅面板、导出与设置。只依赖 Core 的协议 + 值类型。 |
 

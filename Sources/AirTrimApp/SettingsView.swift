@@ -148,6 +148,8 @@ struct AIServiceSettingsView: View {
 
                 Text("配置保存在本地 JSON 文件，绝不上传。")
                     .font(.caption).foregroundStyle(.secondary)
+
+                CloudASRSettingsView()
             }
             .padding(24)
         }
@@ -199,6 +201,57 @@ struct AIServiceSettingsView: View {
             switch self {
             case .badURL: "API 地址格式错误"
             case .badResponse(let detail): "请求失败：\(detail)"
+            }
+        }
+    }
+}
+
+/// 云端转写设置（DashScope BYOK，ADR-0007）。音频上云仅此一处。
+struct CloudASRSettingsView: View {
+    @State private var apiKey = ""
+    @State private var model = ASRConfig.defaultModel
+    @State private var status: String?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Divider().padding(.vertical, 4)
+
+            Text("云端转写（DashScope）").font(.headline)
+            Text("paraformer-v2 逐字时间戳；音频仅发往阿里云 DashScope，文字稿/废话判断仍只见文字稿。")
+                .font(.caption).foregroundStyle(.secondary)
+
+            HStack(spacing: 4) {
+                Image(systemName: ASRConfig.isConfigured ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(ASRConfig.isConfigured ? .green : .secondary)
+                Text(ASRConfig.isConfigured ? "已配置" : "未配置").font(.callout)
+                    .foregroundStyle(ASRConfig.isConfigured ? .primary : .secondary)
+            }
+
+            LabeledContent("DashScope API Key") {
+                TextField("sk-…", text: $apiKey).textFieldStyle(.roundedBorder)
+            }
+            LabeledContent("模型") {
+                TextField(ASRConfig.defaultModel, text: $model).textFieldStyle(.roundedBorder)
+            }
+            HStack(spacing: 8) {
+                Button("保存") {
+                    guard !apiKey.isEmpty else { status = "API Key 不能为空"; return }
+                    do {
+                        try ASRConfig.save(apiKey: apiKey, model: model)
+                        status = "已保存"
+                    } catch {
+                        status = error.localizedDescription
+                    }
+                }
+                if let status { Text(status).font(.caption).foregroundStyle(.secondary) }
+            }
+            Text("Key 存在本地 JSON 文件（asr-config.json），绝不上传。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            if let config = ASRConfig.load() {
+                apiKey = config.apiKey
+                model = config.model
             }
         }
     }

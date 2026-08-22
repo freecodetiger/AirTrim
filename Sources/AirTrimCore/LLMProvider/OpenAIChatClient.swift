@@ -1,7 +1,7 @@
 import Foundation
 
-/// OpenAI 兼容 chat.completions 客户端。整个 Core 唯一允许联网的模块（架构守卫强制）。
-/// 只发送文字稿——音视频字节绝不经过这里（CLAUDE.md 铁律）。
+/// OpenAI 兼容 chat.completions 客户端。Core 内允许联网的两个模块之一（另一为 ASRProvider/，架构守卫强制）。
+/// 只发送文字稿——音视频字节绝不经过这里（CLAUDE.md 铁律；音频上云仅 ASRProvider，ADR-0007）。
 public struct OpenAIChatClient: Sendable {
     public let config: LLMConfig
 

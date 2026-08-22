@@ -124,9 +124,10 @@ public struct SocialCopywriter: Sendable {
     人设指令块中「红线」是绝对禁止项，违反即整篇不合格。以「语感判据」为最终自检标准：生成后对照判据检查一遍，不像就重写。
     """
 
-    /// 由人设渲染完整 system prompt：共享任务 + 人设块。
+    /// 由人设渲染完整 system prompt：自包含 fullPrompt 优先，否则共享任务 + 人设块。
     static func systemPrompt(for persona: SocialCopyPersona) -> String {
-        taskPrompt + "\n\n" + persona.promptBlock
+        if let full = persona.fullPrompt { return full }
+        return taskPrompt + "\n\n" + persona.promptBlock
     }
 
     /// 生成社交媒体文案。text 应为剪辑后保留的有效字幕文本。

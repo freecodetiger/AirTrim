@@ -5,6 +5,8 @@ import WhisperKit
 /// 转写阶段（真实进度，供 UI 展示；分数只用于显示，非权威时间）
 public enum TranscribePhase: Sendable, Equatable {
     case loadingModel
+    /// 云端：音频上传 / 任务提交 / 轮询中（无确定分数）
+    case uploading
     case transcribing(Double)  // 0...1
 }
 
@@ -77,28 +79,11 @@ public struct WhisperKitTranscriber: Transcriber {
         poller.cancel()
         onProgress?(.transcribing(1))
 
-        let silences = EnergyVAD.silences(samples: pcm, sampleRate: Self.sampleRate)
         let duration = CMTime(value: CMTimeValue(pcm.count), timescale: Self.sampleRate)
-
-        var words: [TranscriptWord] = []
-        for timing in results.flatMap(\.allWords) {
-            let text = ZhNormalizer.simplified(timing.word.trimmingCharacters(in: .whitespaces))
-            guard !text.isEmpty else { continue }
-            var start = CMTime(seconds: Double(timing.start), preferredTimescale: Self.sampleRate)
-            var end = CMTime(seconds: Double(timing.end), preferredTimescale: Self.sampleRate)
-            // VAD 融合：词首在静音里 → 吸附到起音点；并保证区间不倒置
-            if let s = silences.first(where: { CMTimeCompare(start, $0.start) >= 0 && CMTimeCompare(start, $0.end) <= 0 }) {
-                start = s.end
-            }
-            if CMTimeCompare(end, start) < 0 { end = start }
-            words.append(TranscriptWord(text: text, start: start, end: end))
+        let rawWords = results.flatMap(\.allWords).map { timing in
+            (text: timing.word, start: Double(timing.start), end: Double(timing.end))
         }
-
-        return Transcript(
-            words: words,
-            sentences: SentenceSegmenter.sentences(words: words),
-            silences: silences,
-            sourceDuration: duration
-        )
+        // 归一化 / VAD 融合 / 断句 → 两引擎共用（TranscriptAssembly）
+        return TranscriptAssembly.makeTranscript(rawWords: rawWords, pcm: pcm, sourceDuration: duration)
     }
 }

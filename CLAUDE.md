@@ -30,7 +30,7 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 - **源媒体文件只读。** 任何"剪辑"都是 `EditList`（keep/cut 区间的值类型）上的操作；只有导出才产生新文件（ADR-0004）。
 - **`EditList` 是剪辑状态的唯一真相源。** 绝不在别处维护第二份剪辑区间、第二份 undo 栈。
 - **时间戳的唯一来源是本地管线**（ASR 词级时间戳 + VAD）。权威时间用 `CMTime`（有理数），`Double` 秒只用于 UI 展示。**LLM 永不产生时间戳**，只引用句编号，由本地反查词级数据。
-- **云端只见文字稿。** 音频/视频字节绝不上传；网络调用只允许出现在 `LLMProvider/`（脚本守卫）。
+- **LLM 只见文字稿；ASR 音频例外。** 除 ADR-0007 的 ASR 转写音频（DashScope，BYOK）外，音视频字节绝不上传；网络调用只允许出现在 `LLMProvider/` 与 `ASRProvider/`（脚本守卫）。
 - **建议式编辑。** 三个分析器（停顿/语气词/废话）输出统一为 `EditSuggestion`；废话（verbosity）建议**必须人工确认**，绝不自动应用。UI 只有一套审阅交互。
 - **剪切点必须自然。** 零间隙硬拼是禁令：最小停顿保留 + 音频 crossfade + 词边界 padding，参数见 `cut-quality` skill。
 - **`AirTrimCore` 绝不 `import SwiftUI`/`AppKit`**；`Analysis/` 纯值类型，不 `import AVFoundation`。（由 `scripts/check-architecture.sh` 守卫。）
@@ -43,7 +43,8 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 | 关注点 | 唯一 owner | 位置 |
 |---|---|---|
 | 媒体解码 · 音频抽取 · 预览合成 · 导出/烧录 | `MediaEngine` | `Sources/AirTrimCore/MediaEngine/` |
-| VAD 静音检测 + ASR 转写（词级时间戳）→ `Transcript` | `SpeechPipeline` | `Sources/AirTrimCore/SpeechPipeline/` |
+| VAD 静音检测 + ASR 转写（词级时间戳）→ `Transcript`（本地 WhisperKit 默认 + 云端可选，共用 `TranscriptAssembly`） | `SpeechPipeline` | `Sources/AirTrimCore/SpeechPipeline/` |
+| 云端 ASR 客户端（DashScope paraformer，BYOK · 音频上云唯一路径） | `ASRProvider` | `Sources/AirTrimCore/ASRProvider/` |
 | 停顿分析 | `PauseAnalyzer` | `Sources/AirTrimCore/Analysis/` |
 | 语气词分析 | `FillerAnalyzer` | `Sources/AirTrimCore/Analysis/` |
 | 结合全文的废话分析 | `VerbosityAnalyzer` | `Sources/AirTrimCore/Analysis/` |
@@ -75,8 +76,8 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 - ❌ 修改或覆盖源媒体文件。
 - ❌ 在 `EditModel` 之外维护剪辑区间 / undo 状态副本。
 - ❌ 把 LLM 返回的时间戳或任何数字直接入库（只允许句编号反查本地数据）。
-- ❌ 上传音频/视频字节到任何网络端点。
-- ❌ `URLSession` / 网络代码出现在 `LLMProvider/` 之外。
+- ❌ 上传音频/视频字节到任何网络端点（唯一例外：ASR 转写音频 → DashScope 录音识别，见 ADR-0007）。
+- ❌ `URLSession` / 网络代码出现在 `LLMProvider/` 与 `ASRProvider/` 之外。
 - ❌ 自动应用 verbosity（废话）建议。
 - ❌ 剪切点零间隙硬拼（必须最小停顿保留 + crossfade，见 `cut-quality` skill）。
 - ❌ `AirTrimCore` 里 `import SwiftUI`/`AppKit`；`Analysis/` 里 `import AVFoundation`。

@@ -38,6 +38,20 @@ struct SocialCopyPersonaTests {
         }
     }
 
+    @Test func generalUsesSelfContainedFullPrompt() {
+        let prompt = SocialCopywriter.systemPrompt(for: .general)
+        // fullPrompt 生效：自包含，不走 taskPrompt + promptBlock
+        #expect(SocialCopyPersona.general.fullPrompt != nil)
+        #expect(prompt == SocialCopyPersona.general.fullPrompt)
+        // 新 prompt 锚点
+        #expect(prompt.contains("方向一：真实记录型"))
+        #expect(prompt.contains("不要输出你的分析过程"))
+        // 不含共享 taskPrompt 的任务级指令/旧输出格式
+        #expect(!prompt.contains("【标题方案】"))
+        #expect(!prompt.contains("共 3 个标题方案"))
+        #expect(!prompt.contains("最终推荐"))
+    }
+
     @Test func systemPromptComposesTaskAndPersona() {
         let prompt = SocialCopywriter.systemPrompt(for: .techGrowth)
         // taskPrompt 锚点：输出契约 + 精简数量

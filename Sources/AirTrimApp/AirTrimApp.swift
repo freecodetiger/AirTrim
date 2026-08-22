@@ -210,6 +210,7 @@ struct ProjectHomeView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
+                environmentStatusBar
                 importArea
                 if let last = lastOpened {
                     section("继续上次") {
@@ -245,6 +246,16 @@ struct ProjectHomeView: View {
         }
         .onAppear { model.loadProjects() }
         .navigationTitle("AirTrim")
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    SettingsWindowManager.open(model: model)
+                } label: {
+                    Label("设置", systemImage: "gearshape")
+                }
+                .help("AI 服务 · 云端转写 · 模型管理")
+            }
+        }
         // 删除缓存需确认（P1）；只删 JSON，源文件永远不动
         .confirmationDialog(
             "删除「\(pendingDelete?.fileName ?? "")」的项目缓存？",
@@ -274,6 +285,38 @@ struct ProjectHomeView: View {
     private func open(_ project: ProjectMetadata) {
         guard project.sourceExists else { missingSource = project; return }
         model.start(url: project.sourceURL)
+    }
+
+    /// 首屏环境状态提示：转写引擎（本地模型/云端转写）与 LLM 的就绪情况 + 入口。
+    private var environmentStatusBar: some View {
+        HStack(spacing: 10) {
+            if model.environmentReady {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                Text("环境就绪").font(.callout.weight(.medium))
+                Text(environmentDetail)
+                    .font(.caption).foregroundStyle(.secondary)
+            } else {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.orange)
+                Text("环境未就绪").font(.callout.weight(.medium))
+                Text(environmentDetail)
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("去准备…") { model.stage = .environmentSetup }
+                    .buttonStyle(.link)
+            }
+            Spacer()
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.06)))
+    }
+
+    private var environmentDetail: String {
+        let asr = model.modelFolder != nil
+            ? "本地模型"
+            : (ASRConfig.isConfigured ? "云端转写" : "无转写引擎")
+        let llm = LLMConfig.isConfigured ? "LLM 就绪" : "LLM 未配置"
+        return "\(asr) · \(llm)"
     }
 
     private var importArea: some View {

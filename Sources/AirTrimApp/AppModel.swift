@@ -14,6 +14,8 @@ final class AppModel: ObservableObject {
     enum Stage {
         case environmentSetup
         case idle
+        /// 新转写前选择引擎（本地 / 云端，每次必选）
+        case choosingEngine(url: URL)
         case transcribing(fileName: String, startedAt: Date)
         /// 转写完成 → 进编辑器前：自动语义断句（D-EAS-2/3）
         case preparing
@@ -22,8 +24,10 @@ final class AppModel: ObservableObject {
     }
 
     @Published var stage: Stage = .idle
-    /// 环境是否就绪：语音模型 + LLM 都配置（D-EAS-1 硬门槛）
-    var environmentReady: Bool { modelFolder != nil && LLMConfig.isConfigured }
+    /// 本次转写选中的引擎（影响阶段文案；本地默认）
+    @Published private(set) var activeEngine: ASREngine = .local
+    /// 环境是否就绪：ASR（本地模型 或 云端 Key 任一）且 LLM 都配置（D-EAS-1 门槛，ADR-0007 放松）
+    var environmentReady: Bool { (modelFolder != nil || ASRConfig.isConfigured) && LLMConfig.isConfigured }
     /// 环境未就绪时点开的项目，就绪后继续打开（不丢意图）
     @Published var pendingProjectURL: URL?
     // 转写真实进度（显示值；权威时间永远在 Transcript）
@@ -183,9 +187,10 @@ final class AppModel: ObservableObject {
             }
         }
         // 冒烟/回归钩子：AIRTRIM_AUTOLOAD=<视频路径> 启动即转写直达编辑器（不走首屏）
+        // 钩子固定本地引擎（D-EAS-1 已保证本地模型就绪），绕开每次必选的引擎选择页
         if let auto = ProcessInfo.processInfo.environment["AIRTRIM_AUTOLOAD"],
            modelFolder != nil {
-            start(url: URL(fileURLWithPath: auto))
+            start(url: URL(fileURLWithPath: auto), engine: .local)
         }
         // M4 起不再自动恢复上次项目（D-M4-1）：首屏是项目管理页，
         // 上次项目降级为「继续上次」置顶卡片（lastProjectURL）
@@ -272,8 +277,8 @@ final class AppModel: ObservableObject {
         start(url: url)
     }
 
-    func start(url: URL, forceRetranscribe: Bool = false) {
-        // D-EAS-1 硬门槛：模型 + LLM 双就绪才进核心工作流；否则停环境准备页（记住意图）
+    func start(url: URL, forceRetranscribe: Bool = false, engine: ASREngine? = nil) {
+        // D-EAS-1 硬门槛：ASR（本地模型 或 云端 Key）且 LLM 就绪才进核心工作流；否则停环境准备页（记住意图）
         guard environmentReady else {
             pendingProjectURL = url
             stage = .environmentSetup
@@ -299,7 +304,11 @@ final class AppModel: ObservableObject {
             backfillDerivedAudioIfNeeded(url: url)
             return
         }
-        guard let modelFolder else { stage = .environmentSetup; return }
+        guard let engine else {
+            stage = .choosingEngine(url: url)
+            return
+        }
+        activeEngine = engine
         sourceURL = url
         stage = .transcribing(fileName: url.lastPathComponent, startedAt: Date())
         transcribePhaseText = "抽取音频…"
@@ -308,11 +317,25 @@ final class AppModel: ObservableObject {
             do {
                 let pcm = try await PCMExtractor.monoPCM(url: url)
                 self.warnIfLong(pcmSampleCount: pcm.count)
-                let tokenizerDir = modelFolder.appendingPathComponent("tokenizer")
-                let transcriber = WhisperKitTranscriber(
-                    modelFolder: modelFolder,
-                    tokenizerFolder: FileManager.default.fileExists(atPath: tokenizerDir.path)
-                        ? tokenizerDir : nil)
+                let transcriber: any Transcriber
+                switch engine {
+                case .local:
+                    guard let modelFolder else {
+                        self.stage = .failed("本地模型未就绪。可在「设置 → 语音模型」下载，或改选云端转写。")
+                        return
+                    }
+                    let tokenizerDir = modelFolder.appendingPathComponent("tokenizer")
+                    transcriber = WhisperKitTranscriber(
+                        modelFolder: modelFolder,
+                        tokenizerFolder: FileManager.default.fileExists(atPath: tokenizerDir.path)
+                            ? tokenizerDir : nil)
+                case .cloud:
+                    guard let config = ASRConfig.load() else {
+                        self.stage = .failed("未配置云端转写。可在「设置 → AI 服务」填写 DashScope API Key。")
+                        return
+                    }
+                    transcriber = CloudASRTranscriber(config: config)
+                }
                 let result = try await transcriber.transcribe(
                     audioPath: url.path, pcm: pcm, language: "zh"
                 ) { phase in
@@ -328,8 +351,11 @@ final class AppModel: ObservableObject {
             } catch let error as MediaEngineError {
                 self.stage = .failed(error.localizedDescription)
             } catch {
-                // 非媒体错误大概率是模型加载/推理失败——给出可行动的出路
-                self.stage = .failed("转写失败：\(error.localizedDescription)\n若模型文件不完整，可在「设置 → 模型」重新下载校验。")
+                // 非媒体错误大概率是引擎/网络失败——给出可行动的出路
+                let hint = engine == .cloud
+                    ? "请检查网络与 API Key；也可改选本地转写。"
+                    : "若模型文件不完整，可在「设置 → 模型」重新下载校验。"
+                self.stage = .failed("转写失败：\(error.localizedDescription)\n\(hint)")
             }
         }
     }
@@ -414,11 +440,23 @@ final class AppModel: ObservableObject {
     }
 
     private func apply(_ phase: TranscribePhase) {
-        switch phase {
-        case .loadingModel:
+        switch (activeEngine, phase) {
+        case (.cloud, .loadingModel):
+            transcribePhaseText = "连接云端转写…"
+            transcribeFraction = nil
+        case (.cloud, .uploading):
+            transcribePhaseText = "上传音频，云端转写中…"
+            transcribeFraction = nil
+        case (.cloud, .transcribing):
+            transcribePhaseText = "云端转写完成"
+            transcribeFraction = nil
+        case (_, .loadingModel):
             transcribePhaseText = "加载模型…（约十几秒）"
             transcribeFraction = nil
-        case .transcribing(let fraction):
+        case (_, .uploading):
+            transcribePhaseText = "转写中…"
+            transcribeFraction = nil
+        case (_, .transcribing(let fraction)):
             transcribePhaseText = "本地转写中…"
             transcribeFraction = fraction
         }

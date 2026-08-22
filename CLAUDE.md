@@ -43,7 +43,8 @@ AirTrim 是开源的 macOS 原生「口播精剪」工具，面向自媒体创�
 | 关注点 | 唯一 owner | 位置 |
 |---|---|---|
 | 媒体解码 · 音频抽取 · 预览合成 · 导出/烧录 | `MediaEngine` | `Sources/AirTrimCore/MediaEngine/` |
-| VAD 静音检测 + ASR 转写（词级时间戳）→ `Transcript` | `SpeechPipeline` | `Sources/AirTrimCore/SpeechPipeline/` |
+| VAD 静音检测 + ASR 转写（词级时间戳）→ `Transcript`（本地 WhisperKit 默认 + 云端可选，共用 `TranscriptAssembly`） | `SpeechPipeline` | `Sources/AirTrimCore/SpeechPipeline/` |
+| 云端 ASR 客户端（DashScope paraformer，BYOK · 音频上云唯一路径） | `ASRProvider` | `Sources/AirTrimCore/ASRProvider/` |
 | 停顿分析 | `PauseAnalyzer` | `Sources/AirTrimCore/Analysis/` |
 | 语气词分析 | `FillerAnalyzer` | `Sources/AirTrimCore/Analysis/` |
 | 结合全文的废话分析 | `VerbosityAnalyzer` | `Sources/AirTrimCore/Analysis/` |

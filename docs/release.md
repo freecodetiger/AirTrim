@@ -50,7 +50,9 @@ CI（`.github/workflows/release.yml`）在 `v*` tag push 时跑同一条 `releas
 导出证书：钥匙串访问 → 登录 → 我的证书 → 该 Developer ID 证书 → 导出为 `.p12`，
 然后 `base64 -i cert.p12 | gh secret set MACOS_CERT_P12`。
 
-> ⚠️ 这条 CI 路径**尚未在真实 runner 上验证过**（首次带 tag 发版要盯 run 日志）。
+> 该路径已于 2026-09-30 用一次性 tag（`v0.0.0-citest`）端到端验证通过：产物 `spctl` 输出
+> `accepted` / `source=Notarized Developer ID`，`stapler validate` 通过。验证用的 tag 与
+> release 已删除，仓库 secrets 保留。
 
 发版：`git tag v<版本> && git push origin v<版本>`（push 需 owner 明确执行）。
 Release notes 按「新增/修复/已知问题」三段写。

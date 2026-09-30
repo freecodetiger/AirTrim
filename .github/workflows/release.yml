@@ -8,6 +8,12 @@ on:
 permissions:
   contents: write
 
+# 需要的仓库 secrets（Settings → Secrets and variables → Actions）：
+#   MACOS_CERT_P12          Developer ID Application 证书导出的 .p12，base64 后一行
+#   MACOS_CERT_PASSWORD     导出 .p12 时设的密码
+#   KEYCHAIN_PASSWORD       CI 临时钥匙串的密码（随便定，仅本次运行用）
+#   APPLE_SIGN_IDENTITY     形如 "Developer ID Application: 名字 (TEAMID)"
+#   APPLE_ID / APPLE_TEAM_ID / APPLE_APP_PASSWORD    notarytool 公证凭据
 jobs:
   release:
     runs-on: macos-15
@@ -15,9 +21,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Build (release)
-        run: swift build -c release --product AirTrimApp
 
       - name: Run tests
         run: swift test
@@ -29,11 +32,41 @@ jobs:
         id: version
         run: echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
-      - name: Bundle .app
-        run: scripts/make-app.sh release "${{ steps.version.outputs.value }}"
+      - name: Import Developer ID certificate
+        env:
+          CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
+          CERT_PASSWORD: ${{ secrets.MACOS_CERT_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          KC=airtrim-signing.keychain-db
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          security set-keychain-settings -lut 1800 "$KC"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KC"
+          echo "$CERT_P12" | base64 --decode > /tmp/cert.p12
+          security import /tmp/cert.p12 -k "$KC" -P "$CERT_PASSWORD" -T /usr/bin/codesign
+          rm -f /tmp/cert.p12
+          # 免交互访问私钥（否则 codesign 在无 GUI 的 runner 上会挂）
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KC" >/dev/null
+          security list-keychains -d user -s "$KC" $(security list-keychains -d user | tr -d '"')
 
-      - name: Create DMG
-        run: scripts/make-dmg.sh "${{ steps.version.outputs.value }}"
+      - name: Store notarytool credentials
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: |
+          xcrun notarytool store-credentials airtrim-notary \
+            --apple-id "$APPLE_ID" \
+            --team-id "$APPLE_TEAM_ID" \
+            --password "$APPLE_APP_PASSWORD"
+
+      # 与本地发版同一条路径：签名 → DMG → 签名 → 公证 → 装订 → spctl 校验
+      - name: Sign · notarize · staple
+        env:
+          AIRTRIM_SIGN_IDENTITY: ${{ secrets.APPLE_SIGN_IDENTITY }}
+        run: scripts/release-dmg.sh "${{ steps.version.outputs.value }}" airtrim-notary
 
       - name: Upload DMG to Release
         uses: softprops/action-gh-release@v2

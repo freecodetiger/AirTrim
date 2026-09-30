@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 把 SPM 可执行产物打成可双击的 AirTrim.app（本地开发/分发前置）。
-# 产物在 build/AirTrim.app；发布版的 notarize/DMG 流程后续在此基础上加。
+# 产物在 build/AirTrim.app；对外发布再走 scripts/release-dmg.sh（签名+公证+装订）。
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONF="${1:-release}"
-VERSION="${2:-0.1.5}"
+VERSION="${2:-0.1.6}"
 swift build -c "$CONF" --product AirTrimApp
 
 APP=build/AirTrim.app
@@ -42,6 +42,16 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString ${VERSION}" "$APP/Contents/Info.plist"
 
-# 本地 ad-hoc 签名（发布版换 Developer ID + notarize）
-codesign --force --deep --sign - "$APP"
-echo "✅ ${APP} (open build/AirTrim.app 启动)"
+# 签名：AIRTRIM_SIGN_IDENTITY 有值 → Developer ID + hardened runtime + 安全时间戳
+# （对外发布用，公证的硬要求）；无值 → ad-hoc（本地开发/手测，不需要证书）。
+# 不用 --deep：Apple 只推荐它做校验，签名会让嵌套项的责任归属变模糊；
+# 本 bundle 除主可执行文件外无嵌套代码，逐个签即可。
+if [[ -n "${AIRTRIM_SIGN_IDENTITY:-}" ]]; then
+  codesign --force --options runtime --timestamp \
+    --sign "$AIRTRIM_SIGN_IDENTITY" "$APP"
+  codesign --verify --strict --verbose=2 "$APP"
+  echo "✅ ${APP} · Developer ID 签名（hardened runtime + 时间戳）"
+else
+  codesign --force --sign - "$APP"
+  echo "✅ ${APP} · ad-hoc 签名（open build/AirTrim.app 启动）"
+fi

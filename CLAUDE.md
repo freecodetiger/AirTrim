@@ -117,6 +117,6 @@ scripts/check-architecture.sh    # 分层守卫（Core 无 UI；网络仅 LLMPro
 ## 现状备注
 
 - **M0 已完成（2026-07-26）**：ASR 选型定为 WhisperKit + VAD 融合（ADR-0006），量化报告见 `docs/spikes/results/`；spike 工具保留在 `Sources/AirTrimSpike/`（兼作回归工具：transcribe/evaluate/burn/srt）。
-- **M1 已完成（2026-07-27）**：转写→逐句编辑→SRT/烧录导出全链路 + 持久化 + 应用内模型下载，设计见 `docs/design/m1-subtitle-tool.md`，发版流程见 `docs/release.md`（公证待 owner 证书）。当前处于 **M2（一键紧凑）实施阶段**，分支 `feat/m2-tighten`，设计见 `docs/design/m2-tighten.md`。
+- **M1 已完成（2026-07-27）**：转写→逐句编辑→SRT/烧录导出全链路 + 持久化 + 应用内模型下载，设计见 `docs/design/m1-subtitle-tool.md`，发版流程见 `docs/release.md`（Developer ID 签名 + 公证，`scripts/release-dmg.sh` 一条命令跑完）。当前处于 **M2（一键紧凑）实施阶段**，分支 `feat/m2-tighten`，设计见 `docs/design/m2-tighten.md`。
 - 项目名 **AirTrim** 已定（2026-07 由工作名 "AirCut" 更名，避免与 CapCut 撞名及 haircut 谐音）。
 - 文档索引：`docs/architecture/overview.md`（总设计）· `ownership-map.md`（职责表）· `docs/adr/`（决策记录）· `docs/roadmap.md`（里程碑）· `docs/spikes/`（技术验证）。

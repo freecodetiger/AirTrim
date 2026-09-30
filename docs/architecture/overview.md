@@ -30,7 +30,8 @@
   │                    EditList = keep/cut 区间（唯一真相源，值类型快照）
   │                          │
   ├─ MediaEngine.preview ── AVMutableComposition（零转码实时预览）
-  └─ MediaEngine.export ─── AVAssetExportSession（导出 + 字幕烧录）+ SRT/FCPXML
+  └─ MediaEngine.export ─── AVAssetExportSession（导出 + 字幕烧录）
+                              + SRT / 词级时间轴 JSON（Subtitles）/ FCPXML
 ```
 
 ## 3. 模块职责
@@ -122,6 +123,9 @@ struct EditSession: Sendable {         // undo = 快照栈
 - 预览：`EditList` → `AVMutableComposition`（`insertTimeRange` 拼 keep 区间），零转码、秒级反馈。
 - 导出 v1：`AVAssetExportSession` 全量重编码（简单可靠）；关键帧对齐的智能剪切留到后续优化。
 - 字幕：烧录（Core Animation 合成）+ SRT + FCPXML（进 Final Cut 精修的专业出口）。
+- 词级时间轴 JSON（`Subtitles.WordTimingExport`，纯值类型序列化）：**成片轴**词级时间戳，
+  给 hyperframes 动画工作流的 Agent 加字幕/动画用。默认文件名 `transcript.json`
+  ——对方据这个精确文件名跳过自己的重转写。词时间戳与成片逐样本对齐（同 `SRT` 的换算路径）。
 
 ## 6. 已识别的最大风险
 

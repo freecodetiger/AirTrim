@@ -18,7 +18,7 @@
 | 网络调用 · LLM 文字稿（BYOK，Key 存 llm-config.json 明文） | `LLMProvider` | `Sources/AirTrimCore/LLMProvider/` | URLSession 仅此目录 + `ASRProvider/`（脚本） |
 | 云端 ASR 客户端 · 音频上云 · 词级时间戳拉取 | `ASRProvider` | `Sources/AirTrimCore/ASRProvider/` | 同上（ADR-0007） |
 | **剪辑状态**：`EditList` · suggestion 生命周期 · `TranscriptPatch`（改字/断句修订）· undo | `EditModel` | `Sources/AirTrimCore/EditModel/` | 代码评审 |
-| 字幕条生成（Transcript+Patch → cues → SRT 文本） | `Subtitles` | `Sources/AirTrimCore/Subtitles/` | 无 AVFoundation（脚本） |
+| 字幕条生成 + 词级时间轴导出（Transcript+Patch+EditList → cues / SRT 文本 / 成片轴词级 JSON） | `Subtitles` | `Sources/AirTrimCore/Subtitles/` | 无 AVFoundation（脚本） |
 | UI 全部 | `AirTrimApp` | `Sources/AirTrimApp/` | Core 无 SwiftUI/AppKit（脚本） |
 
 ## 分层与依赖方向

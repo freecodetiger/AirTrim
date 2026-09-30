@@ -577,6 +577,11 @@ struct EditorView: View {
                     } label: {
                         Label("导出 SRT 字幕", systemImage: "doc.plaintext")
                     }
+                    Button {
+                        model.exportWordTimings()
+                    } label: {
+                        Label("导出词级时间轴 JSON（给动画 Agent）", systemImage: "curlybraces")
+                    }
                     Divider()
                     Button {
                         model.exportVideo()
@@ -593,7 +598,7 @@ struct EditorView: View {
                 } label: {
                     Label("导出", systemImage: "square.and.arrow.up")
                 }
-                .help("导出 SRT 字幕、无字幕剪辑视频或烧录字幕的视频")
+                .help("导出 SRT 字幕、词级时间轴 JSON、无字幕剪辑视频或烧录字幕的视频")
 
                 Button {
                     SettingsWindowManager.open(model: model)

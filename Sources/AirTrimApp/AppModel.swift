@@ -1235,4 +1235,22 @@ final class AppModel: ObservableObject {
             exportError = "SRT 写入失败：\(error.localizedDescription)"
         }
     }
+
+    /// 导出词级时间轴 JSON（成片轴）：喂 hyperframes 动画工作流的 Agent。
+    /// 默认文件名 `transcript.json`——`/embedded-captions` 只认这个精确文件名
+    /// 才会跳过自己那遍 WhisperX 重转写；存到 hyperframes 项目目录即可直接生效。
+    func exportWordTimings() {
+        guard let transcript else { return }
+        let json = WordTimingExport.json(
+            WordTimingExport.document(transcript: transcript, edits: session.current.edits))
+        let panel = NSSavePanel()
+        panel.allowedContentTypes = [.json]
+        panel.nameFieldStringValue = "transcript.json"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            try json.write(to: url, options: .atomic)
+        } catch {
+            exportError = "词级时间轴写入失败：\(error.localizedDescription)"
+        }
+    }
 }
